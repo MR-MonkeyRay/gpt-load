@@ -564,9 +564,26 @@ func (s *Server) handleRefreshGroupCredentialState(c *gin.Context) {
 		writeServiceError(c, "refresh_group_credential_state", mapControlJSONError(err))
 		return
 	}
-	result, err := s.service.RefreshCredentialState(c.Request.Context(), groupID, credentialID)
+	result, err := s.service.StartCredentialStateRefresh(c.Request.Context(), groupID, credentialID)
 	if err != nil {
 		writeServiceError(c, "refresh_group_credential_state", err)
+		return
+	}
+	response.SuccessI18n(c, "common.success", result)
+}
+
+func (s *Server) handleStopGroupCredentialState(c *gin.Context) {
+	groupID, ok := groupID(c, "stop_group_credential_state")
+	if !ok {
+		return
+	}
+	credentialID, ok := credentialID(c, "stop_group_credential_state")
+	if !ok {
+		return
+	}
+	result, err := s.service.StopCredentialStateRefresh(c.Request.Context(), groupID, credentialID)
+	if err != nil {
+		writeServiceError(c, "stop_group_credential_state", err)
 		return
 	}
 	response.SuccessI18n(c, "common.success", result)

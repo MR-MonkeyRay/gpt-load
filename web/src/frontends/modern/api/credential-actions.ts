@@ -99,38 +99,13 @@ export async function refreshCredentialQuota(
     }),
   )
 }
-export interface CredentialStateRefresh {
-  turn_state: string
-  attempts: number
-  refreshed_at_ms: number
-}
-export async function refreshCredentialState(
-  client: ApiClient,
-  group: number,
-  id: number,
-  signal: AbortSignal,
-): Promise<CredentialStateRefresh> {
-  const data = record(
-    await client.request(`/api/groups/${group}/credentials/${id}/state-refresh`, {
-      method: 'POST',
-      json: {},
-      signal,
-    }),
-  )
-  const turnState = text(data.turn_state)
-  if (!turnState) throw new InvalidResponseError()
-  return {
-    turn_state: turnState,
-    attempts: integer(data.attempts, 1),
-    refreshed_at_ms: integer(data.refreshed_at_ms),
-  }
-}
 export interface CredentialStateRefreshRecord {
   id: number
   status: 'succeeded' | 'failed'
   errorCode: string
   turnState: string
   stateLength: number
+  // attempts 是这次探测在其刷新运行中的序号，从 1 开始，不是尝试次数。
   attempts: number
   httpStatus: number | null
   model: string
@@ -145,6 +120,10 @@ export interface CredentialStateSnapshot {
   turnStateLength: number
   requiredLength: number
   refreshedAt: number | null
+  // expiresAt 是已保留 state 自身携带的有效期；为空表示解析不出有效期。
+  expiresAt: number | null
+  // running 由服务端给出：界面只跟随它切换启停与轮询，不自行计时。
+  running: boolean
   logs: CredentialStateRefreshRecord[]
 }
 function readStateRefreshRecord(value: unknown): CredentialStateRefreshRecord {
@@ -165,16 +144,8 @@ function readStateRefreshRecord(value: unknown): CredentialStateRefreshRecord {
     createdAt: integer(row.created_at_ms, 1),
   }
 }
-// 只保留完整长度的 state，读取同时回看最近的刷新记录。
-export async function getCredentialState(
-  client: ApiClient,
-  group: number,
-  id: number,
-  signal: AbortSignal,
-): Promise<CredentialStateSnapshot> {
-  const data = record(
-    await client.request(`/api/groups/${group}/credentials/${id}/state-refresh`, { signal }),
-  )
+function readCredentialStateSnapshot(value: unknown): CredentialStateSnapshot {
+  const data = record(value)
   return {
     turnState: text(data.turn_state),
     turnStateLength: integer(data.turn_state_length),
@@ -183,8 +154,53 @@ export async function getCredentialState(
       data.refreshed_at_ms === null || data.refreshed_at_ms === undefined
         ? null
         : integer(data.refreshed_at_ms, 1),
+    expiresAt:
+      data.expires_at_ms === null || data.expires_at_ms === undefined
+        ? null
+        : integer(data.expires_at_ms, 1),
+    running: boolean(data.running),
     logs: list(data.logs).map(readStateRefreshRecord),
   }
+}
+// 只保留完整长度的 state，读取同时回看最近的刷新记录。
+export async function getCredentialState(
+  client: ApiClient,
+  group: number,
+  id: number,
+  signal: AbortSignal,
+): Promise<CredentialStateSnapshot> {
+  return readCredentialStateSnapshot(
+    await client.request(`/api/groups/${group}/credentials/${id}/state-refresh`, { signal }),
+  )
+}
+// 启动后台刷新运行：请求立即返回 running 为真的快照，后续结果由轮询补齐。
+export async function startCredentialStateRefresh(
+  client: ApiClient,
+  group: number,
+  id: number,
+  signal: AbortSignal,
+): Promise<CredentialStateSnapshot> {
+  return readCredentialStateSnapshot(
+    await client.request(`/api/groups/${group}/credentials/${id}/state-refresh`, {
+      method: 'POST',
+      json: {},
+      signal,
+    }),
+  )
+}
+// 停止刷新运行：返回的快照已包含这次运行的最后一条记录，running 为假。
+export async function stopCredentialStateRefresh(
+  client: ApiClient,
+  group: number,
+  id: number,
+  signal: AbortSignal,
+): Promise<CredentialStateSnapshot> {
+  return readCredentialStateSnapshot(
+    await client.request(`/api/groups/${group}/credentials/${id}/state-refresh`, {
+      method: 'DELETE',
+      signal,
+    }),
+  )
 }
 export async function revealCredential(
   client: ApiClient,

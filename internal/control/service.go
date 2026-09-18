@@ -91,7 +91,8 @@ type Service struct {
 	observationFlights    map[observationFlightKey]*observationFlight
 	observationSemaphore  chan struct{}
 	stateMu               sync.Mutex
-	stateFlights          map[uint]*stateRefreshFlight
+	stateRuns             map[uint]*stateRefreshRun
+	stateRefreshInterval  time.Duration
 }
 
 type credentialRuntimeRetirer interface {
@@ -261,6 +262,7 @@ func NewService(
 		operationRecoveryWake: make(chan struct{}, 1),
 		observationFlights:    make(map[observationFlightKey]*observationFlight),
 		observationSemaphore:  make(chan struct{}, 1),
+		stateRefreshInterval:  defaultStateRefreshInterval,
 	}
 	if cfg != nil {
 		service.environmentProxy = outboundproxy.Environment()

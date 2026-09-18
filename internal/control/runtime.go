@@ -61,14 +61,17 @@ func (ticker standardRuntimeTicker) Stop() {
 }
 
 type Runtime struct {
-	registry           *state.CredentialRegistry
-	validator          validationSweep
-	requestLogCleaner  RequestLogCleaner
-	stageCleaner       credentialStageCleaner
-	operationRecovery  operationRecoveryRuntime
-	catalogSync        catalogSyncRuntime
-	oauthCallback      *OAuthCallbackManager
-	manager            *state.Manager
+	registry          *state.CredentialRegistry
+	validator         validationSweep
+	requestLogCleaner RequestLogCleaner
+	stageCleaner      credentialStageCleaner
+	operationRecovery operationRecoveryRuntime
+	catalogSync       catalogSyncRuntime
+	oauthCallback     *OAuthCallbackManager
+	manager           *state.Manager
+	// stateRefreshes owns the background State refresh runs that must converge
+	// before storage closes.
+	stateRefreshes     *Service
 	validationInterval time.Duration
 	validationJitter   func() time.Duration
 	now                func() time.Time
@@ -92,6 +95,7 @@ func NewRuntime(
 		requestLogCleaner:  requestLogCleaner,
 		stageCleaner:       operationRecovery,
 		operationRecovery:  operationRecovery,
+		stateRefreshes:     operationRecovery,
 		catalogSync:        catalogSync,
 		manager:            manager,
 		validationInterval: defaultValidationInterval,
@@ -161,6 +165,10 @@ func (runtime *Runtime) Run(ctx context.Context) {
 		}()
 	}
 	wait.Wait()
+	if runtime.stateRefreshes != nil {
+		// 后台 State 刷新属于控制面运行期的一部分，必须在存储关闭前收敛。
+		runtime.stateRefreshes.stopStateRefreshes()
+	}
 }
 
 func (runtime *Runtime) runValidation(

@@ -46,6 +46,7 @@ import {
   restoreTestedCredential,
   refreshCredentialObservation,
   refreshCredentialState,
+  stopCredentialStateRefresh,
   testCredentialConnection,
   updateCredential,
 } from '@/app/resources/credentials'
@@ -76,7 +77,6 @@ import QueryFeedback from '@/components/ui/QueryFeedback.vue'
 import SkeletonSurface from '@/components/ui/SkeletonSurface.vue'
 import SubscriptionCredentialStager from '@/features/import/SubscriptionCredentialStager.vue'
 import { presentSubscriptionErrorKey } from '@/features/subscription-error-presenter'
-import { formatLocalInstant } from '@/lib/format'
 import { createUUID } from '@/lib/uuid'
 
 import CredentialBatchBar from './GroupCredentialBatchBar.vue'
@@ -93,6 +93,8 @@ import {
 } from '../group-route'
 
 const batchCredentialConcurrency = 4
+// 刷新运行期间重读快照的间隔，让刷新记录随运行实时增长。
+const stateRefreshPollIntervalMS = 2_000
 type FullCredentialAction = 'download' | 'enable' | 'disable' | 'restore'
 type CredentialTestRestoreError = 'failed' | 'conflict' | 'conflict_refresh_failed'
 
@@ -105,7 +107,7 @@ const client = useApiClient()
 const queryClient = useQueryClient()
 const route = useRoute()
 const router = useRouter()
-const { locale, n, t } = useI18n()
+const { n, t } = useI18n()
 const toast = useToast()
 const filters = computed(() => parseCredentialRouteQuery(route.query))
 const routeState = computed(() => parseCredentialRouteState(route.query))
@@ -138,6 +140,7 @@ const detailErrors = ref(new Map<number, string>())
 const credentialStates = ref(new Map<number, CredentialStateDto>())
 const stateErrors = ref(new Map<number, string>())
 const stateLoadingIDs = ref(new Set<number>())
+const statePollTimers = new Map<number, number>()
 const observationErrors = ref(new Map<number, string>())
 const batchObservationPending = ref(new Set<number>())
 const feedback = ref('')
@@ -350,6 +353,7 @@ watch(
     connectionStages.value = []
     loadedDetails.value = new Map()
     detailErrors.value = new Map()
+    stopAllStatePolling()
     credentialStates.value = new Map()
     stateErrors.value = new Map()
     stateLoadingIDs.value = new Set()
@@ -544,6 +548,7 @@ function clearDetailState(id: number): void {
 }
 // 凭据数据变化后已保留的 State 可能过期，丢弃记录以便下次展开重新读取。
 function clearCredentialState(id: number): void {
+  stopStatePolling(id)
   const states = new Map(credentialStates.value)
   states.delete(id)
   credentialStates.value = states
@@ -560,10 +565,43 @@ function stateLoading(id: number): boolean {
 function stateError(id: number): string {
   return stateErrors.value.get(id) ?? ''
 }
-// State 记录只在展开详情时读取；刷新后强制重读以显示本次结果。
-async function loadCredentialState(item: CredentialItemDto, force = false): Promise<void> {
+// 运行状态完全来自服务端快照：running 为真时按固定间隔重读，快照报告运行结束后立即停止。
+function stopStatePolling(id: number): void {
+  const timer = statePollTimers.get(id)
+  if (timer === undefined) return
+  window.clearInterval(timer)
+  statePollTimers.delete(id)
+}
+function stopAllStatePolling(): void {
+  for (const id of [...statePollTimers.keys()]) stopStatePolling(id)
+}
+function applyCredentialState(id: number, state: CredentialStateDto): void {
+  const next = new Map(credentialStates.value)
+  next.set(id, state)
+  credentialStates.value = next
+  if (!state.running) {
+    stopStatePolling(id)
+    return
+  }
+  if (statePollTimers.has(id)) return
+  statePollTimers.set(
+    id,
+    window.setInterval(() => {
+      void pollCredentialState(id)
+    }, stateRefreshPollIntervalMS),
+  )
+}
+async function pollCredentialState(id: number): Promise<void> {
+  try {
+    applyCredentialState(id, await getCredentialState(client, props.groupId, id))
+  } catch {
+    // 单次轮询失败保留上一次快照，等下一次轮询再试。
+  }
+}
+// State 记录只在展开详情时读取。
+async function loadCredentialState(item: CredentialItemDto): Promise<void> {
   const id = item.credential_id
-  if (!force && (stateLoadingIDs.value.has(id) || credentialStates.value.has(id))) return
+  if (stateLoadingIDs.value.has(id) || credentialStates.value.has(id)) return
   const errors = new Map(stateErrors.value)
   errors.delete(id)
   stateErrors.value = errors
@@ -571,10 +609,7 @@ async function loadCredentialState(item: CredentialItemDto, force = false): Prom
   loading.add(id)
   stateLoadingIDs.value = loading
   try {
-    const state = await getCredentialState(client, props.groupId, id)
-    const next = new Map(credentialStates.value)
-    next.set(id, state)
-    credentialStates.value = next
+    applyCredentialState(id, await getCredentialState(client, props.groupId, id))
   } catch {
     const nextErrors = new Map(stateErrors.value)
     nextErrors.set(id, t('group.credentials.subscription.state.loadFailed'))
@@ -792,35 +827,42 @@ async function refreshCredentialToken(item: CredentialItemDto): Promise<void> {
 }
 
 // 手动刷新只回填凭据的 turn_state，凭据行本身不变，因此不刷新列表也不改写缓存。
-const turnStateDisplayLimit = 24
-function truncateTurnState(value: string): string {
-  return value.length > turnStateDisplayLimit ? `${value.slice(0, turnStateDisplayLimit)}…` : value
-}
-
-async function refreshState(item: CredentialItemDto): Promise<void> {
-  if (pending(item.credential_id)) return
+// State 刷新在后台运行：同一个控件按服务端快照在启动与停止之间切换。
+async function toggleStateRefresh(item: CredentialItemDto): Promise<void> {
+  const id = item.credential_id
+  if (pending(id)) return
   feedback.value = ''
-  setPending(item.credential_id, 'state-refresh', true)
+  const running = credentialState(id)?.running === true
+  setPending(id, 'state-refresh', true)
   try {
-    const result = await refreshCredentialState(client, props.groupId, item.credential_id)
+    applyCredentialState(
+      id,
+      running
+        ? await stopCredentialStateRefresh(client, props.groupId, id)
+        : await refreshCredentialState(client, props.groupId, id),
+    )
     toast.show({
-      message: t('group.credentials.subscription.refreshStateSucceeded', {
-        state: truncateTurnState(result.turn_state),
-        time: formatLocalInstant(result.refreshed_at_ms, locale.value),
-      }),
+      message: t(
+        running
+          ? 'group.credentials.subscription.stopRefreshStateSucceeded'
+          : 'group.credentials.subscription.refreshStateStarted',
+      ),
       tone: 'success',
     })
   } catch (cause) {
     toast.show({
       message: t(
-        presentSubscriptionErrorKey(cause, 'group.credentials.subscription.refreshStateFailed'),
+        presentSubscriptionErrorKey(
+          cause,
+          running
+            ? 'group.credentials.subscription.stopRefreshStateFailed'
+            : 'group.credentials.subscription.refreshStateFailed',
+        ),
       ),
       tone: 'danger',
     })
   } finally {
-    setPending(item.credential_id, 'state-refresh', false)
-    // 成功与失败都会新增一条刷新记录，重读以显示本次结果。
-    await loadCredentialState(item, true)
+    setPending(id, 'state-refresh', false)
   }
 }
 
@@ -1299,6 +1341,7 @@ async function saveConnectedAccounts(): Promise<void> {
 
 onBeforeUnmount(resetConnectionInspection)
 onBeforeUnmount(resetCredentialTestState)
+onBeforeUnmount(stopAllStatePolling)
 
 async function reconcileBatch(
   action: 'enable' | 'disable' | 'delete' | 'restore',
@@ -1934,7 +1977,7 @@ async function runBatch(
               @reset="openResetCreditDialog"
               @download="downloadCredentialFile"
               @refresh-credential="refreshCredentialToken"
-              @refresh-state="refreshState"
+              @refresh-state="toggleStateRefresh"
               @load-state="loadCredentialState"
               @remove="
                 deleteTarget = {

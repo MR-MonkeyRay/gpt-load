@@ -18,6 +18,7 @@ import (
 	"gpt-load/internal/accessquota"
 	"gpt-load/internal/channel"
 	"gpt-load/internal/connection"
+	"gpt-load/internal/execution"
 	"gpt-load/internal/outboundproxy"
 	"gpt-load/internal/platform/config"
 	"gpt-load/internal/platform/encryption"
@@ -799,7 +800,8 @@ func mapCredentials(rows []models.Credential, groups []models.Group) []state.Cre
 			),
 			Fingerprint: row.Fingerprint, WeightManual: cloneWeight(row.WeightManual),
 			Status: state.CredentialStatus(row.Status), AuthState: state.CredentialAuthState(row.AuthState), EncryptedValue: row.Data,
-			TurnState: row.TurnState,
+			TurnState:            row.TurnState,
+			TurnStateExpiresAtMS: execution.TurnStateExpiryMS(row.TurnState),
 		})
 	}
 	return result

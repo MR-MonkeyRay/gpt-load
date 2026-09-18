@@ -28,7 +28,6 @@ import type {
   CredentialRevealDto,
   CredentialStateDto,
   CredentialStateRecordDto,
-  CredentialStateRefreshDto,
   CredentialStatus,
   CredentialSummaryDto,
   CredentialTestResultDto,
@@ -188,7 +187,15 @@ const observationSnapshotFields = [
   'reset_credits_available',
   'reset_credits',
 ] as const
-const stateRefreshFields = ['turn_state', 'attempts', 'refreshed_at_ms'] as const
+const stateRefreshFields = [
+  'turn_state',
+  'turn_state_length',
+  'required_length',
+  'refreshed_at_ms',
+  'expires_at_ms',
+  'running',
+  'logs',
+] as const
 const stateRecordFields = [
   'id',
   'status',
@@ -522,13 +529,18 @@ function projectObservation(value: unknown): CredentialObservationDto {
   }
 }
 
-function projectCredentialStateRefresh(value: unknown): CredentialStateRefreshDto {
+// 读取、启动与停止刷新返回同一份快照，因此共用一套投影。
+function projectCredentialStateRefresh(value: unknown): CredentialStateDto {
   const record = projectRecord(value)
   assertNoSecretLikeFields(record, stateRefreshFields)
   return {
     turn_state: projectString(record.turn_state, { allowEmpty: true }),
-    attempts: projectSafeInteger(record.attempts, { minimum: 0 }),
-    refreshed_at_ms: projectEpochMilliseconds(record.refreshed_at_ms),
+    turn_state_length: projectSafeInteger(record.turn_state_length, { minimum: 0 }),
+    required_length: projectSafeInteger(record.required_length, { minimum: 1 }),
+    refreshed_at_ms: projectNullableEpochMilliseconds(record.refreshed_at_ms),
+    expires_at_ms: projectNullableEpochMilliseconds(record.expires_at_ms),
+    running: projectBoolean(record.running),
+    logs: projectArray(record.logs, projectCredentialStateRecord),
   }
 }
 
@@ -1027,16 +1039,32 @@ export async function refreshCredentialObservation(
   )
 }
 
+/** 启动后台刷新运行，立即返回当前快照（running 为真）。 */
 export async function refreshCredentialState(
   client: ApiClient,
   groupId: number,
   credentialId: number,
   signal?: AbortSignal,
-): Promise<CredentialStateRefreshDto> {
+): Promise<CredentialStateDto> {
   return projectCredentialStateRefresh(
     await client.request(`/api/groups/${groupId}/credentials/${credentialId}/state-refresh`, {
       method: 'POST',
       json: {},
+      signal,
+    }),
+  )
+}
+
+/** 停止后台刷新运行，返回已包含收尾记录的快照（running 为假）。 */
+export async function stopCredentialStateRefresh(
+  client: ApiClient,
+  groupId: number,
+  credentialId: number,
+  signal?: AbortSignal,
+): Promise<CredentialStateDto> {
+  return projectCredentialStateRefresh(
+    await client.request(`/api/groups/${groupId}/credentials/${credentialId}/state-refresh`, {
+      method: 'DELETE',
       signal,
     }),
   )
@@ -1048,27 +1076,11 @@ export async function getCredentialState(
   credentialId: number,
   signal?: AbortSignal,
 ): Promise<CredentialStateDto> {
-  const record = projectRecord(
+  return projectCredentialStateRefresh(
     await client.request(`/api/groups/${groupId}/credentials/${credentialId}/state-refresh`, {
       signal,
     }),
   )
-  assertNoSecretLikeFields(record, [
-    'turn_state',
-    'turn_state_length',
-    'required_length',
-    'refreshed_at_ms',
-    'logs',
-  ])
-  return {
-    turn_state: projectString(record.turn_state, { allowEmpty: true }),
-    turn_state_length: projectSafeInteger(record.turn_state_length, { minimum: 0 }),
-    required_length: projectSafeInteger(record.required_length, { minimum: 1 }),
-    ...(record.refreshed_at_ms === undefined || record.refreshed_at_ms === null
-      ? {}
-      : { refreshed_at_ms: projectEpochMilliseconds(record.refreshed_at_ms) }),
-    logs: projectArray(record.logs, projectCredentialStateRecord),
-  }
 }
 
 export async function refreshCredential(

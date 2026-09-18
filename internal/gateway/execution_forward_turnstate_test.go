@@ -6,11 +6,13 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"gpt-load/internal/dialect"
 	"gpt-load/internal/execution"
 	"gpt-load/internal/protocol"
 	"gpt-load/internal/state"
+	"gpt-load/internal/testutil/turnstatetest"
 )
 
 // The stored turn state must only ever reach the model it was captured for.
@@ -78,16 +80,22 @@ func TestTurnStateInjectionIsBoundToTheStatsModel(t *testing.T) {
 }
 
 // The stored turn state must reach the upstream request and the request log
-// only for the model it was captured for.
+// only for the model it was captured for, and only while it is still valid.
 func TestHandlerRecordsInjectedTurnStateOnlyForTheStatsModel(t *testing.T) {
-	stateValue := strings.Repeat("s", execution.CodexTurnStateLength)
+	validState := turnstatetest.Token(time.Now().Add(time.Hour))
+	expiredState := turnstatetest.Token(time.Now().Add(-time.Minute))
 	for _, test := range []struct {
-		name      string
-		model     string
+		name       string
+		model      string
+		stateValue string
+		// wantInput 是进入执行层的状态：过期值在注册表里就不会发布。
+		wantInput string
+		// wantValue 是请求日志记录的状态：只有目标模型会真正注入。
 		wantValue string
 	}{
-		{name: "stats model", model: execution.CodexTurnStateModel, wantValue: stateValue},
-		{name: "other model", model: "gpt-5", wantValue: ""},
+		{name: "stats model", model: execution.CodexTurnStateModel, stateValue: validState, wantInput: validState, wantValue: validState},
+		{name: "other model", model: "gpt-5", stateValue: validState, wantInput: validState, wantValue: ""},
+		{name: "expired state", model: execution.CodexTurnStateModel, stateValue: expiredState, wantInput: "", wantValue: ""},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			forwarder := &scriptedForwarder{results: []UpstreamResult{{
@@ -98,7 +106,7 @@ func TestHandlerRecordsInjectedTurnStateOnlyForTheStatsModel(t *testing.T) {
 			engine, _, _, registry := newRequestLogHandlerTestRuntimeWithModel(
 				t, forwarder, &recordingAccessKeyRPMLimiter{}, sink, test.model, "sk-first",
 			)
-			if !registry.SetCredentialTurnState(1, stateValue) {
+			if !registry.SetCredentialTurnState(1, test.stateValue) {
 				t.Fatal("SetCredentialTurnState() did not publish the value")
 			}
 			request := httptest.NewRequest(
@@ -113,8 +121,8 @@ func TestHandlerRecordsInjectedTurnStateOnlyForTheStatsModel(t *testing.T) {
 			if response.Code != http.StatusOK || len(forwarder.inputs) != 1 {
 				t.Fatalf("response/inputs = %d/%#v", response.Code, forwarder.inputs)
 			}
-			if got := forwarder.inputs[0].CredentialTurnState; got != stateValue {
-				t.Fatalf("forward credential turn state = %q", got)
+			if got := forwarder.inputs[0].CredentialTurnState; got != test.wantInput {
+				t.Fatalf("forward credential turn state = %q, want %q", got, test.wantInput)
 			}
 			events := sink.snapshot()
 			if len(events) != 1 || events[0].TurnState != test.wantValue {

@@ -252,12 +252,6 @@ export interface CredentialObservationDto {
   last_error_code?: string
 }
 
-export interface CredentialStateRefreshDto {
-  turn_state: string
-  attempts: number
-  refreshed_at_ms: number
-}
-
 /** 一次手动 State 刷新的持久记录，成功与失败都保留。 */
 export interface CredentialStateRecordDto {
   id: number
@@ -265,6 +259,7 @@ export interface CredentialStateRecordDto {
   error_code?: string
   turn_state: string
   state_length: number
+  /** 该次探测在其所属刷新运行中的序号，从 1 开始，不是运行内的尝试次数。 */
   attempts: number
   http_status?: number
   model: string
@@ -275,12 +270,16 @@ export interface CredentialStateRecordDto {
   created_at_ms: number
 }
 
-/** 已保留的 State 及其记录时间，附带最近刷新记录。 */
+/** 已保留的 State 及其记录时间，附带运行状态与最近刷新记录。 */
 export interface CredentialStateDto {
   turn_state: string
   turn_state_length: number
   required_length: number
-  refreshed_at_ms?: number
+  refreshed_at_ms: number | null
+  /** State 自身携带的有效期；为空表示无法从该值解析出有效期。 */
+  expires_at_ms: number | null
+  /** 由服务端报告的刷新运行状态，不由本地计时器推导。 */
+  running: boolean
   logs: CredentialStateRecordDto[]
 }
 

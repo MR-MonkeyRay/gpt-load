@@ -3,12 +3,14 @@ import { Info, RefreshCw } from '@lucide/vue'
 import { useQuery, useQueryClient } from '@tanstack/vue-query'
 import { computed, onScopeDispose, ref, watch } from 'vue'
 import { useMessageSource } from '@modern/app/messages'
+import { runningPolling } from '@modern/app/query'
 import { useI18n } from 'vue-i18n'
 import {
   credentialDetailKey,
   getCredentialDetail,
   getCredentialState,
-  refreshCredentialState,
+  startCredentialStateRefresh,
+  stopCredentialStateRefresh,
   updateCredential,
 } from '@modern/api/credential-actions'
 import type { CredentialRow } from '@modern/api/group-detail'
@@ -26,6 +28,7 @@ import {
   AppTooltip,
 } from '@modern/components/ui'
 import { useApiClient } from '@shared/http/client-context'
+import { useClock } from '@modern/components/ui/clock'
 import { credentialStatus, credentialTime } from './credential-presentation'
 import { validProxyURL } from '@modern/app/proxy'
 import GroupWorkspacePanel from './GroupWorkspacePanel.vue'
@@ -134,19 +137,25 @@ async function save(): Promise<void> {
 }
 onScopeDispose(() => controller.abort())
 
-// State 区块：查看已保留的 state 与记录时间，并回看逐次刷新记录。
+// State 区块：启停后台刷新运行、轮询运行中的记录，并展示已保留 state 的有效期。
 const supportsStateRefresh = computed(() => Boolean(props.channel?.stateRefresh))
+const stateQueryKey = ['modern', 'credential-state', props.group.id, props.row.id] as const
 const stateQuery = useQuery({
-  queryKey: ['modern', 'credential-state', props.group.id, props.row.id] as const,
+  queryKey: stateQueryKey,
   queryFn: ({ signal }) => getCredentialState(client, props.group.id, props.row.id, signal),
   enabled: computed(() => supportsStateRefresh.value),
+  // 轮询策略由 app/query.ts 统一提供：服务端快照报告 running 时才回看。
+  ...runningPolling,
 })
-const stateRefreshing = ref(false)
-const stateFeedback = ref<{ tone: 'success' | 'danger'; text: string }>()
+const now = useClock()
+const stateRunning = computed(() => stateQuery.data.value?.running ?? false)
+const stateExpiresAt = computed(() => stateQuery.data.value?.expiresAt ?? null)
+const stateExpired = computed(
+  () => stateExpiresAt.value !== null && stateExpiresAt.value <= now.value,
+)
+const statePending = ref(false)
+const stateFeedback = ref('')
 const stateController = new AbortController()
-function statePreview(value: string): string {
-  return value.length > 16 ? `${value.slice(0, 16)}…` : value
-}
 function stateProxyLabel(value: string): string {
   if (value === 'direct') return t('credentialCards.state.proxyDirect')
   return value === '' ? t('credentialCards.state.proxyEnvironment') : value
@@ -158,34 +167,35 @@ function stateFailureLabel(code: string): string {
 function stateRecordTime(value: number | null): string {
   return value ? credentialTime(value, locale.value) : '—'
 }
-async function refreshState(): Promise<void> {
-  if (stateRefreshing.value || !supportsStateRefresh.value) return
-  stateRefreshing.value = true
-  stateFeedback.value = undefined
+async function toggleStateRefresh(): Promise<void> {
+  if (statePending.value || !supportsStateRefresh.value) return
+  const stopping = stateRunning.value
+  statePending.value = true
+  stateFeedback.value = ''
   try {
-    const result = await refreshCredentialState(
-      client,
-      props.group.id,
-      props.row.id,
-      stateController.signal,
-    )
+    const snapshot = stopping
+      ? await stopCredentialStateRefresh(
+          client,
+          props.group.id,
+          props.row.id,
+          stateController.signal,
+        )
+      : await startCredentialStateRefresh(
+          client,
+          props.group.id,
+          props.row.id,
+          stateController.signal,
+        )
     if (stateController.signal.aborted) return
-    stateFeedback.value = {
-      tone: 'success',
-      text: `${t('credentialCards.stateRefreshed', { state: statePreview(result.turn_state) })} · ${t(
-        'credentialCards.state.recordedAt',
-      )} ${stateRecordTime(result.refreshed_at_ms)}`,
-    }
-    await stateQuery.refetch()
+    cache.setQueryData(stateQueryKey, snapshot)
   } catch {
     if (!stateController.signal.aborted) {
-      stateFeedback.value = {
-        tone: 'danger',
-        text: t('credentialCards.state.refreshFailed'),
-      }
+      stateFeedback.value = t(
+        stopping ? 'credentialCards.state.stopFailed' : 'credentialCards.state.refreshFailed',
+      )
     }
   } finally {
-    stateRefreshing.value = false
+    statePending.value = false
   }
 }
 onScopeDispose(() => stateController.abort())
@@ -355,15 +365,15 @@ useMessageSource(() =>
             variant="outline"
             size="xs"
             :icon="RefreshCw"
-            :loading="stateRefreshing"
-            @click="refreshState"
+            :loading="statePending"
+            @click="toggleStateRefresh"
           >
-            {{ t('credentialCards.stateRefresh') }}
+            {{
+              t(stateRunning ? 'credentialCards.stateStopRefresh' : 'credentialCards.stateRefresh')
+            }}
           </AppButton>
         </div>
-        <AppNotice v-if="stateFeedback" :tone="stateFeedback.tone">{{
-          stateFeedback.text
-        }}</AppNotice>
+        <AppNotice v-if="stateFeedback" tone="danger">{{ stateFeedback }}</AppNotice>
         <dl class="modern-credential-detail-metrics">
           <div>
             <dt>{{ t('credentialCards.state.current') }}</dt>
@@ -377,6 +387,23 @@ useMessageSource(() =>
           <div>
             <dt>{{ t('credentialCards.state.recordedAt') }}</dt>
             <dd>{{ stateRecordTime(stateQuery.data.value?.refreshedAt ?? null) }}</dd>
+          </div>
+          <div>
+            <dt>{{ t('credentialCards.state.expiresAt') }}</dt>
+            <dd>
+              <span v-if="stateExpiresAt !== null" class="modern-state-expiry">
+                <span :class="{ 'modern-credential-detail-failure': stateExpired }">{{
+                  credentialTime(stateExpiresAt, locale)
+                }}</span>
+                <AppBadge v-if="stateExpired" tone="danger" size="xs">{{
+                  t('credentialCards.state.expired')
+                }}</AppBadge>
+              </span>
+              <span v-else-if="stateQuery.data.value?.turnState">{{
+                t('credentialCards.state.expiryUnknown')
+              }}</span>
+              <span v-else>—</span>
+            </dd>
           </div>
         </dl>
         <p v-if="stateQuery.data.value" class="modern-credential-detail-hint">
@@ -405,7 +432,9 @@ useMessageSource(() =>
                 t(`credentialCards.state.status.${log.status}`)
               }}</AppBadge>
               <span>{{ credentialTime(log.createdAt, locale) }}</span>
-              <span>{{ t('credentialCards.state.attempts', { count: n(log.attempts) }) }}</span>
+              <span>{{
+                t('credentialCards.state.attemptOrdinal', { count: n(log.attempts) })
+              }}</span>
               <span>{{
                 t('credentialCards.state.stateLength', { length: n(log.stateLength) })
               }}</span>
@@ -534,6 +563,11 @@ useMessageSource(() =>
   font-family: var(--modern-font-mono);
   font-size: var(--modern-font-size-small);
   overflow-wrap: anywhere;
+}
+.modern-state-expiry {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--modern-space-1-5);
 }
 .modern-state-history {
   display: grid;

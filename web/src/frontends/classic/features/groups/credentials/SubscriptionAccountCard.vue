@@ -200,6 +200,24 @@ function stateFailureLabel(code: string): string {
   const key = `group.credentials.subscription.state.failure.${code}`
   return te(key) ? t(key) : code
 }
+// 运行状态取自服务端快照：同一个控件在启动与停止之间切换。
+const stateActionLabel = computed(() =>
+  t(
+    props.state?.running
+      ? 'group.credentials.subscription.stopRefreshState'
+      : 'group.credentials.subscription.refreshState',
+  ),
+)
+const stateExpiresAtMS = computed(() => props.state?.expires_at_ms ?? null)
+const stateExpired = computed(
+  () => stateExpiresAtMS.value !== null && stateExpiresAtMS.value <= nowMs.value,
+)
+// 无有效期只说明该值解析不出到期时间；完全没有 State 时沿用「尚未记录」的占位。
+const stateExpiryPlaceholder = computed(() =>
+  props.state?.turn_state
+    ? t('group.credentials.subscription.unknown')
+    : t('group.credentials.subscription.state.empty'),
+)
 const snapshot = computed(() => observation.value?.snapshot)
 function isAccountWideQuotaWindow(window: CredentialQuotaWindowDto): boolean {
   return window.scope === 'account'
@@ -1406,7 +1424,7 @@ function runMenuAction(
             :disabled="busy"
             @click="emit('refresh-state', item)"
           >
-            {{ t('group.credentials.subscription.refreshState') }}
+            {{ stateActionLabel }}
           </AppButton>
         </div>
         <p v-if="stateLoading && !state" class="subscription-account__state-status" role="status">
@@ -1440,6 +1458,20 @@ function runMenuAction(
                   :empty-label="t('group.credentials.subscription.unknown')"
                   hint
                 />
+              </dd>
+            </div>
+            <div>
+              <dt>{{ t('group.credentials.subscription.state.expiresAt') }}</dt>
+              <dd class="subscription-account__state-expiry">
+                <template v-if="stateExpiresAtMS !== null">
+                  <span>{{ formatLocalInstant(stateExpiresAtMS, locale) }}</span>
+                  <StatusBadge v-if="stateExpired" tone="danger" size="compact">
+                    {{ t('group.credentials.subscription.state.expired') }}
+                  </StatusBadge>
+                </template>
+                <span v-else class="subscription-account__state-empty">
+                  {{ stateExpiryPlaceholder }}
+                </span>
               </dd>
             </div>
           </dl>
@@ -2178,6 +2210,12 @@ function runMenuAction(
   min-width: 0;
   color: var(--color-text);
   font-variant-numeric: tabular-nums;
+}
+.subscription-account__state-expiry {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
 }
 .subscription-account__state-value {
   display: block;

@@ -9,7 +9,9 @@ import (
 	"testing"
 	"time"
 
+	"gpt-load/internal/execution"
 	providerobservation "gpt-load/internal/subscription/providers/observation"
+	"gpt-load/internal/testutil/turnstatetest"
 )
 
 func TestKeyRegistryReplaceAndEncryptedValue(t *testing.T) {
@@ -1343,4 +1345,48 @@ func keyStatus(t *testing.T, registry *CredentialRegistry, credentialID uint) Cr
 		t.Fatalf("key %d does not exist", credentialID)
 	}
 	return registry.buckets[groupID][credentialID].Status
+}
+
+// The replay value of one captured turn state never outlives the expiry it
+// carries, and a capture without a readable expiry is never replayed.
+func TestCredentialTurnStateStopsAtItsEmbeddedExpiry(t *testing.T) {
+	registry := NewCredentialRegistry()
+	now := time.Date(2026, time.September, 18, 12, 0, 0, 0, time.UTC)
+	registry.now = func() time.Time { return now }
+	mustReplaceKeyEntries(t, registry, []CredentialEntry{{
+		ID: 1, GroupID: 10, Status: CredentialStatusActive, Version: 1, IdentityGeneration: 1,
+		Fingerprint: "test-fingerprint", EncryptedValue: "cipher-one",
+	}})
+	ref, ok := registry.CredentialRef(1)
+	if !ok || ref.TurnState != "" {
+		t.Fatalf("unpublished reference = %#v, found = %t", ref, ok)
+	}
+
+	value := turnstatetest.Token(now.Add(time.Hour))
+	if !registry.SetCredentialTurnState(1, value) {
+		t.Fatal("SetCredentialTurnState() did not publish the value")
+	}
+	if ref, _ := registry.CredentialRef(1); ref.TurnState != value {
+		t.Fatalf("published reference = %#v", ref)
+	}
+	refs := registry.CaptureActiveCredentialRefs([]uint{10})
+	if len(refs) != 1 || refs[0].TurnState != value {
+		t.Fatalf("captured references = %#v", refs)
+	}
+
+	now = now.Add(2 * time.Hour)
+	if ref, _ := registry.CredentialRef(1); ref.TurnState != "" {
+		t.Fatalf("expired reference = %#v", ref)
+	}
+	if refs := registry.CaptureActiveCredentialRefs([]uint{10}); len(refs) != 1 || refs[0].TurnState != "" {
+		t.Fatalf("expired captured references = %#v", refs)
+	}
+
+	// 长度正确但无法解析有效期的值同样不可复用。
+	if !registry.SetCredentialTurnState(1, strings.Repeat("s", execution.CodexTurnStateLength)) {
+		t.Fatal("SetCredentialTurnState() did not publish the value")
+	}
+	if ref, _ := registry.CredentialRef(1); ref.TurnState != "" {
+		t.Fatalf("unreadable reference = %#v", ref)
+	}
 }

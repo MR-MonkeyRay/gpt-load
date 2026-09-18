@@ -528,6 +528,7 @@ func decodeSettingValue(raw string) (any, error) {
 func isIgnoredSystemSetting(key string) bool {
 	return strings.HasPrefix(key, models.InternalSystemSettingPrefix) ||
 		key == outboundproxy.SystemSettingKey ||
+		key == outboundproxy.StatsSystemSettingKey ||
 		key == "contact_info" // 兼容本分支旧版本保存的已移除设置。
 }
 
@@ -798,6 +799,7 @@ func mapCredentials(rows []models.Credential, groups []models.Group) []state.Cre
 			),
 			Fingerprint: row.Fingerprint, WeightManual: cloneWeight(row.WeightManual),
 			Status: state.CredentialStatus(row.Status), AuthState: state.CredentialAuthState(row.AuthState), EncryptedValue: row.Data,
+			TurnState: row.TurnState,
 		})
 	}
 	return result

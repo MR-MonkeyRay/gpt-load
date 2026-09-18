@@ -109,6 +109,7 @@ export interface LogEntry {
   error_summary: string
   affinity_hit: boolean
   affinity_kind: string
+  turn_state: string
   group_id: number | null
   channel_id: string | null
   credential_id: number | null
@@ -280,6 +281,7 @@ function entry(value: unknown): LogEntry {
     error_summary: text(row.error_summary),
     affinity_hit: boolean(row.affinity_hit),
     affinity_kind: text(row.affinity_kind),
+    turn_state: text(row.turn_state),
     group_id: optionalNumber(row.group_id),
     channel_id: optionalText(row.channel_id),
     credential_id: optionalNumber(row.credential_id),

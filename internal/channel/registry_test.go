@@ -192,7 +192,9 @@ func TestCodexIsTheOnlySubscriptionChannelWithoutExposingExecutor(t *testing.T) 
 		t.Fatalf("subscription authorization methods = %#v", got)
 	}
 	if !descriptor.Capabilities.ModelDiscovery || !descriptor.Capabilities.QuotaObservation ||
-		!reflect.DeepEqual(descriptor.Capabilities.CredentialActions, []CredentialAction{CredentialActionResetCredit}) {
+		!reflect.DeepEqual(descriptor.Capabilities.CredentialActions, []CredentialAction{
+			CredentialActionResetCredit, CredentialActionStatsRefresh,
+		}) {
 		t.Fatalf("subscription capabilities = %#v", descriptor.Capabilities)
 	}
 	if len(descriptor.ParamFields) != 1 || descriptor.ParamFields[0].Key != "base_url" ||

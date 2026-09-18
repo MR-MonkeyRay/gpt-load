@@ -86,7 +86,10 @@ const (
 // CredentialAction is one safe account action advertised to the management UI.
 type CredentialAction string
 
-const CredentialActionResetCredit CredentialAction = "reset_credit"
+const (
+	CredentialActionResetCredit  CredentialAction = "reset_credit"
+	CredentialActionStatsRefresh CredentialAction = "stats_refresh"
+)
 
 // CapabilityDescriptor is the safe public projection of optional channel behavior.
 type CapabilityDescriptor struct {

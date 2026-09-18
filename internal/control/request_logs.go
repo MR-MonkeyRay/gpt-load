@@ -150,6 +150,7 @@ type requestLogItemResponse struct {
 	ErrorSummary            string                       `json:"error_summary"`
 	AffinityHit             bool                         `json:"affinity_hit"`
 	AffinityKind            string                       `json:"affinity_kind"`
+	TurnState               string                       `json:"turn_state"`
 	GroupID                 *uint                        `json:"group_id"`
 	ChannelID               *channel.ID                  `json:"channel_id"`
 	CredentialID            *uint                        `json:"credential_id"`
@@ -332,6 +333,7 @@ func sanitizeAccessKeyRequestLog(record requestlog.Record) requestlog.Record {
 	record.AttemptCount = 0
 	record.AffinityHit = false
 	record.AffinityKind = ""
+	record.TurnState = ""
 	record.GroupID = 0
 	record.ChannelID = ""
 	record.CredentialID = 0
@@ -956,6 +958,7 @@ func mapRequestLogItemResponse(
 		ErrorSummary:            record.ErrorSummary,
 		AffinityHit:             record.AffinityHit,
 		AffinityKind:            record.AffinityKind,
+		TurnState:               record.TurnState,
 		GroupID:                 usageCost.groupID,
 		ChannelID:               usageCost.channelID,
 		CredentialID:            usageCost.credentialID,

@@ -1120,6 +1120,7 @@ func TestRequestLogEndpointsBindAccessKeyScopeAndRedactRoutingInternals(t *testi
 		AttemptCount:          2,
 		AffinityHit:           true,
 		AffinityKind:          telemetry.AffinityPromptCacheKey,
+		TurnState:             "private-turn-state",
 		GroupID:               99,
 		ChannelID:             channel.OpenAI,
 		CredentialID:          101,
@@ -1230,6 +1231,7 @@ func assertAccessKeyLogRedaction(t *testing.T, body []byte, detail bool) {
 		"model_consistency":       `"not_applicable"`,
 		"affinity_hit":            "false",
 		"affinity_kind":           `""`,
+		"turn_state":              `""`,
 		"group_id":                "null",
 		"channel_id":              "null",
 		"credential_id":           "null",
@@ -1246,7 +1248,7 @@ func assertAccessKeyLogRedaction(t *testing.T, body []byte, detail bool) {
 		t.Fatalf("AccessKey attempts = %s, want []; body=%s", item["attempts"], body)
 	}
 	for _, secret := range []string{
-		"private-upstream-model", "private-reported-model", "private group",
+		"private-upstream-model", "private-reported-model", "private group", "private-turn-state",
 	} {
 		if bytes.Contains(body, []byte(secret)) {
 			t.Fatalf("AccessKey log exposes %q: %s", secret, body)

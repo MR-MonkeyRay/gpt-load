@@ -13,6 +13,7 @@ import (
 
 	cpaembedded "github.com/router-for-me/CLIProxyAPI/v7/gptload-embedded/embedded"
 
+	"gpt-load/internal/execution"
 	subscriptionruntime "gpt-load/internal/subscription/runtime"
 )
 
@@ -251,6 +252,66 @@ func ConsumeResetCredit(ctx context.Context, credential Credential, apiRoot, red
 		return AccountObservation{}, normalizeUpstreamError(err)
 	}
 	return AccountObservation{Payload: append([]byte(nil), value.Payload...), Header: value.Header.Clone()}, nil
+}
+
+// statsProbeFormat and statsProbeRequestPath mirror the native Responses route
+// used by production traffic for this channel.
+const (
+	statsProbeFormat      = "openai-response"
+	statsProbeRequestPath = "/v1/responses"
+)
+
+// StatsProbeRequest is the fixed turn-state probe input. ProxyURL carries the
+// "direct" sentinel or an explicit endpoint; an empty value leaves the
+// transport policy to the surrounding network context.
+type StatsProbeRequest struct {
+	Model                string
+	Input                string
+	ProxyURL             string
+	ProxyFromEnvironment bool
+}
+
+// ProbeTurnState captures the response header carrying the Codex turn state for
+// one credential. The request disconnects as soon as the response headers
+// arrive: no stream chunk is ever consumed.
+func ProbeTurnState(
+	ctx context.Context,
+	executor Executor,
+	credential Credential,
+	baseURL string,
+	request StatsProbeRequest,
+) (string, error) {
+	if executor == nil {
+		return "", errors.New("codex stats probe executor is unavailable")
+	}
+	payload, err := json.Marshal(struct {
+		Model  string `json:"model"`
+		Input  string `json:"input"`
+		Stream bool   `json:"stream"`
+	}{Model: request.Model, Input: request.Input, Stream: true})
+	if err != nil {
+		return "", fmt.Errorf("encode codex stats probe request: %w", err)
+	}
+	// The probe owns cancellation so the upstream stream is dropped the moment
+	// the headers are observed instead of waiting for the caller's deadline.
+	probeContext, cancel := context.WithCancel(ctx)
+	defer cancel()
+	response, err := executor.ExecuteStream(probeContext, credentialIdentity(credential), credential, ExecuteRequest{
+		Model:                request.Model,
+		Payload:              payload,
+		Format:               statsProbeFormat,
+		RequestPath:          statsProbeRequestPath,
+		BaseURL:              baseURL,
+		ProxyURL:             request.ProxyURL,
+		ProxyFromEnvironment: request.ProxyFromEnvironment,
+	})
+	if err != nil {
+		return "", normalizeUpstreamError(err)
+	}
+	if response == nil {
+		return "", errors.New("codex stats probe returned no response")
+	}
+	return strings.TrimSpace(response.Headers.Get(execution.CodexTurnStateHeader)), nil
 }
 
 func codexOptions(ctx context.Context) (cpaembedded.Options, error) {

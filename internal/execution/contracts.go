@@ -26,6 +26,14 @@ func (e *ValidationError) Error() string {
 	return fmt.Sprintf("%s: %s", e.Field, e.Reason)
 }
 
+// Codex turn state is a request-side header bound to one dedicated model. The
+// value is captured by a manual stats refresh and replayed for that model only.
+const (
+	CodexTurnStateHeader = "X-Codex-Turn-State"
+	CodexTurnStateModel  = "gpt-6-astra"
+	CodexTurnStateLength = 292
+)
+
 // Operation identifies one logical upstream operation.
 type Operation string
 

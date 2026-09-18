@@ -16,6 +16,11 @@ var ErrInvalidConfig = errors.New("invalid outbound proxy config")
 
 const SystemSettingKey = "proxy_config"
 
+// StatsSystemSettingKey stores the dedicated outbound proxy used by manual
+// credential stats refreshes. When unset or inherit it falls back to the global
+// effective proxy policy.
+const StatsSystemSettingKey = "stats_proxy_config"
+
 type Mode string
 
 const (
@@ -174,6 +179,36 @@ func Resolve(credential, group, global, environment *Config) (Effective, error) 
 		return Effective{Config: normalized, Source: candidate.source}, nil
 	}
 	return Effective{Config: Config{Mode: ModeDirect}, Source: SourceDefault}, nil
+}
+
+// ProxyTransport is the transport-facing projection of an effective proxy
+// policy. Direct is the "direct" sentinel, FromEnvironment defers to the
+// process environment, and URL carries an explicit endpoint.
+type ProxyTransport struct {
+	Direct          bool
+	FromEnvironment bool
+	URL             string
+}
+
+// ResolveTransport projects an effective proxy policy into transport settings.
+func ResolveTransport(effective Effective) (ProxyTransport, error) {
+	normalized, err := NormalizeEffective(effective)
+	if err != nil {
+		return ProxyTransport{}, err
+	}
+	switch normalized.Config.Mode {
+	case ModeDirect:
+		return ProxyTransport{Direct: true}, nil
+	case ModeEnvironment:
+		if Environment() == nil {
+			return ProxyTransport{Direct: true}, nil
+		}
+		return ProxyTransport{FromEnvironment: true}, nil
+	case ModeCustom:
+		return ProxyTransport{URL: normalized.Config.URL}, nil
+	default:
+		return ProxyTransport{}, ErrInvalidConfig
+	}
 }
 
 func NormalizeEffective(input Effective) (Effective, error) {

@@ -99,6 +99,32 @@ export async function refreshCredentialQuota(
     }),
   )
 }
+export interface CredentialStatsRefresh {
+  turn_state: string
+  attempts: number
+  refreshed_at_ms: number
+}
+export async function refreshCredentialStats(
+  client: ApiClient,
+  group: number,
+  id: number,
+  signal: AbortSignal,
+): Promise<CredentialStatsRefresh> {
+  const data = record(
+    await client.request(`/api/groups/${group}/credentials/${id}/stats-refresh`, {
+      method: 'POST',
+      json: {},
+      signal,
+    }),
+  )
+  const turnState = text(data.turn_state)
+  if (!turnState) throw new InvalidResponseError()
+  return {
+    turn_state: turnState,
+    attempts: integer(data.attempts, 1),
+    refreshed_at_ms: integer(data.refreshed_at_ms),
+  }
+}
 export async function revealCredential(
   client: ApiClient,
   group: number,

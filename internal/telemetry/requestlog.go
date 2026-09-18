@@ -150,6 +150,7 @@ type RequestEvent struct {
 	DurationMs            int64
 	AffinityHit           bool
 	AffinityKind          string
+	TurnState             string
 	Reasoning             reasoning.Config
 	Attempts              []Attempt
 	Usage                 UsageObservation

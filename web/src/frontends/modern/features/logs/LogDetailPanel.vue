@@ -67,6 +67,7 @@ const routingFields: LogColumnId[] = [
   'model_consistency',
   'upstream_protocol',
   'route_mode',
+  'turn_state',
 ]
 const tokenFields = computed<LogColumnId[]>(() => [
   'input_tokens',

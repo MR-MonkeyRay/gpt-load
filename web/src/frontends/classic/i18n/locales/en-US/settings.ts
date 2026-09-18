@@ -73,6 +73,9 @@ export default {
       responses_websocket_enabled: 'Responses WebSocket',
       websocketHelp:
         'Groups can override this setting. Disabling closes affected WS connections and interrupts generation immediately; HTTP/SSE remains available.',
+      statsProxy: 'Stats Proxy',
+      statsProxyHelp:
+        'Outbound proxy used for manual credential stats refreshes. Falls back to the global outbound proxy when unset.',
       first_byte_timeout: 'Native response / stream first-event timeout',
       request_timeout: 'Upstream request timeout per attempt',
       stream_idle_timeout: 'Stream idle timeout',

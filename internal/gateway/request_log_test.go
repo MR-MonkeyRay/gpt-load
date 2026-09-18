@@ -2202,7 +2202,19 @@ func newRequestLogHandlerTestRuntime(
 	upstreamKeys ...string,
 ) (*gin.Engine, *Handler, *state.Manager, *state.CredentialRegistry) {
 	t.Helper()
-	handler, manager, registry := newHandlerForTest(t, forwarder, upstreamKeys...)
+	return newRequestLogHandlerTestRuntimeWithModel(t, forwarder, limiter, sink, "gpt-4o", upstreamKeys...)
+}
+
+func newRequestLogHandlerTestRuntimeWithModel(
+	t *testing.T,
+	forwarder AttemptForwarder,
+	limiter AccessKeyRPMLimiter,
+	sink telemetry.RequestLogSink,
+	model string,
+	upstreamKeys ...string,
+) (*gin.Engine, *Handler, *state.Manager, *state.CredentialRegistry) {
+	t.Helper()
+	handler, manager, registry := newHandlerForTestWithModel(t, forwarder, health.NewStatsStore(), model, upstreamKeys...)
 	handler.limiter = limiter
 	handler.requestLogSink = sink
 	handler.newRequestID = func() (string, error) { return fixedRequestID, nil }

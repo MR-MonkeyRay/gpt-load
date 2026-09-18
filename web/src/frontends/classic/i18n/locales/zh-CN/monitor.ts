@@ -926,6 +926,7 @@ export default {
       columns: {
         time: '时间',
         modelProtocol: '模型/协议',
+        state: 'State',
         response: '响应',
         cost: '成本',
         tokens: 'Tokens',

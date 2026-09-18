@@ -292,6 +292,17 @@ func (s *Server) HTTPModule() httproute.Module {
 				s.handleRefreshGroupCredentialObservation,
 			),
 			controlRoute(
+				"control.group-credentials.stats-refresh",
+				http.MethodPost,
+				"/groups/:group_id/credentials/:credential_id/stats-refresh",
+				s.auditMutation(newMutationDescriptor(
+					"group_credential_stats_refresh",
+					"group_credential",
+					groupCredentialMutationLocator,
+				)),
+				s.handleRefreshGroupCredentialStats,
+			),
+			controlRoute(
 				"control.group-credentials.refresh",
 				http.MethodPost,
 				"/groups/:group_id/credentials/:credential_id/refresh",

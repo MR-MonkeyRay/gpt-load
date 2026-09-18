@@ -28,13 +28,18 @@ export interface CORSDraft {
   allow_credentials: boolean
   max_age: string
 }
+export interface ProxyDraft {
+  mode: 'inherit' | 'direct' | 'custom'
+  url: string
+}
 export type SettingsDraft = Record<SettingNumber, string> &
   Record<SettingSwitch, boolean> & {
     route_strategy: RouteStrategy
     header_rules: HeaderRow[]
     response_header_rules: HeaderRow[]
     cors: CORSDraft
-    proxy_config: { mode: 'inherit' | 'direct' | 'custom'; url: string }
+    proxy_config: ProxyDraft
+    stats_proxy_config: ProxyDraft
   }
 let nextHeader = 0
 export function newHeader(): HeaderRow {
@@ -66,6 +71,7 @@ export function createSettingsDraft(data: SettingsData): SettingsDraft {
     header_rules: headerRows(values.header_rules),
     response_header_rules: headerRows(values.response_header_rules),
     proxy_config: { mode: values.proxy_config.configured_mode, url: '' },
+    stats_proxy_config: { mode: values.stats_proxy_config.configured_mode, url: '' },
     cors: {
       ...values.cors,
       allowed_origins: values.cors.allowed_origins.join('\n'),
@@ -243,13 +249,14 @@ export function settingsErrors(
       if (!validInteger(draft[number], rule.min, rule.max)) errors[key] = 'number'
     } else if (key === 'header_rules' || key === 'response_header_rules') {
       Object.assign(errors, headerErrors(draft[key], key))
-    } else if (key === 'proxy_config') {
-      const proxy = draft.proxy_config
+    } else if (key === 'proxy_config' || key === 'stats_proxy_config') {
+      const proxy = draft[key]
+      const configured = base.values[key]
       const unchangedURL =
-        proxy.mode === base.values.proxy_config.configured_mode &&
-        (!proxy.url.trim() || proxy.url.trim() === base.values.proxy_config.display_url)
+        proxy.mode === configured.configured_mode &&
+        (!proxy.url.trim() || proxy.url.trim() === configured.display_url)
       if (proxy.mode === 'custom' && !unchangedURL && !validProxyURL(proxy.url.trim()))
-        errors.proxy_config = 'proxy'
+        errors[key] = 'proxy'
     } else if (key === 'cors') {
       const cors = corsValue(draft.cors)
       if (
@@ -300,13 +307,14 @@ export function buildSettingsPatch(
         remove: draft[key].filter((row) => row.action === 'remove').map((row) => row.name.trim()),
       }
     } else if (key === 'cors') patch[key] = corsValue(draft.cors)
-    else if (key === 'proxy_config') {
-      const proxy = draft.proxy_config
+    else if (key === 'proxy_config' || key === 'stats_proxy_config') {
+      const proxy = draft[key]
+      const configured = base.values[key]
       if (
-        proxy.mode === base.values.proxy_config.configured_mode &&
+        proxy.mode === configured.configured_mode &&
         (proxy.mode !== 'custom' ||
           !proxy.url.trim() ||
-          proxy.url.trim() === base.values.proxy_config.display_url)
+          proxy.url.trim() === configured.display_url)
       )
         continue
       patch[key] =

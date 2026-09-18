@@ -47,6 +47,7 @@ export type SettingsValues = Record<SettingNumber, number> &
     response_header_rules: HeaderRules
     cors: CORSConfig
     proxy_config: ProxyConfigView
+    stats_proxy_config: ProxyConfigView
   }
 export type SettingKey = keyof SettingsValues
 export const settingKeys: readonly SettingKey[] = [
@@ -57,6 +58,7 @@ export const settingKeys: readonly SettingKey[] = [
   'response_header_rules',
   'cors',
   'proxy_config',
+  'stats_proxy_config',
 ]
 export interface SettingsData {
   values: SettingsValues
@@ -64,8 +66,11 @@ export interface SettingsData {
   readOnly: SettingKey[]
 }
 export type SettingsPatch = Partial<{
-  [K in Exclude<SettingKey, 'proxy_config'>]: SettingsValues[K] | null
-}> & { proxy_config?: { mode: 'direct' } | { mode: 'custom'; url: string } | null }
+  [K in Exclude<SettingKey, 'proxy_config' | 'stats_proxy_config'>]: SettingsValues[K] | null
+}> & {
+  proxy_config?: { mode: 'direct' } | { mode: 'custom'; url: string } | null
+  stats_proxy_config?: { mode: 'direct' } | { mode: 'custom'; url: string } | null
+}
 
 function readHeaders(value: unknown): HeaderRules {
   const row = record(value)
@@ -132,6 +137,7 @@ function readSettings(value: unknown): SettingsData {
       response_header_rules: readHeaders(values.response_header_rules),
       cors: readCORS(values.cors),
       proxy_config: readProxy(values.proxy_config),
+      stats_proxy_config: readProxy(values.stats_proxy_config),
     },
     overrides: list(row.overrides).map((key) => oneOf(key, settingKeys)),
     readOnly:

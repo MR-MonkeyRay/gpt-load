@@ -949,6 +949,7 @@ export default {
       columns: {
         time: 'Time',
         modelProtocol: 'Model / protocol',
+        state: 'State',
         response: 'Response',
         cost: 'Cost',
         tokens: 'Tokens',

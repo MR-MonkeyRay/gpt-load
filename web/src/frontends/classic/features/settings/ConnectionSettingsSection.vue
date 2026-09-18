@@ -31,11 +31,16 @@ const props = defineProps<{
   proxy: ProxyViewDto
   proxyMode: ProxyConfiguredMode
   proxyEndpoint: string
+  statsProxy: ProxyViewDto
+  statsProxyMode: ProxyConfiguredMode
+  statsProxyEndpoint: string
 }>()
 const emit = defineEmits<{
   change: [change: SettingsDraftChange]
   'update:proxyMode': [value: ProxyConfiguredMode]
   'update:proxyEndpoint': [value: string]
+  'update:statsProxyMode': [value: ProxyConfiguredMode]
+  'update:statsProxyEndpoint': [value: string]
 }>()
 const { locale, t } = useI18n()
 const timeoutKeys: TimeoutSettingKey[] = [
@@ -56,34 +61,41 @@ function setWebsocketEnabled(value: boolean): void {
 }
 
 // 代理沿用其它设置项的覆盖语义：inherit 即“未覆盖”，direct/custom 即“显式覆盖”。
-const proxyOverridden = computed(() => props.proxyMode !== 'inherit')
-const proxyPendingRestore = computed(
-  () => props.proxy.configured_mode !== 'inherit' && props.proxyMode === 'inherit',
-)
-const proxyEffectiveLabel = computed(
-  () => props.proxy.display_url ?? t(`common.proxy.mode.${props.proxy.effective_mode}`),
-)
-const proxyValue = computed(() =>
-  proxyOverridden.value
+// 「出站代理」与「Stats代理」共用同一套行状态推导，只是基线视图不同。
+function proxyRowState(view: ProxyViewDto, mode: ProxyConfiguredMode) {
+  const overridden = mode !== 'inherit'
+  const pendingRestore = view.configured_mode !== 'inherit' && mode === 'inherit'
+  const effectiveLabel = view.display_url ?? t(`common.proxy.mode.${view.effective_mode}`)
+  const value = overridden
     ? t('settings.runtime.overrideValue')
-    : proxyPendingRestore.value
+    : pendingRestore
       ? t('settings.runtime.resetPending')
-      : proxyEffectiveLabel.value,
-)
-const proxySourceLabel = computed(() =>
-  proxyOverridden.value
+      : effectiveLabel
+  const sourceLabel = overridden
     ? t('settings.runtime.overrideSource')
-    : proxyPendingRestore.value
+    : pendingRestore
       ? t('settings.runtime.pendingRestoreSource')
-      : t('settings.runtime.defaultSource'),
-)
-const proxyActionLabel = computed(() =>
-  proxyOverridden.value ? t('settings.runtime.restoreDefault') : t('settings.runtime.override'),
-)
+      : t('settings.runtime.defaultSource')
+  const actionLabel = overridden
+    ? t('settings.runtime.restoreDefault')
+    : t('settings.runtime.override')
+  return { overridden, pendingRestore, value, sourceLabel, actionLabel }
+}
+
+const proxyRow = computed(() => proxyRowState(props.proxy, props.proxyMode))
+const statsProxyRow = computed(() => proxyRowState(props.statsProxy, props.statsProxyMode))
 
 function toggleProxyOverride(): void {
-  emit('update:proxyMode', proxyOverrideToggleMode(props.proxy, proxyOverridden.value))
+  emit('update:proxyMode', proxyOverrideToggleMode(props.proxy, proxyRow.value.overridden))
   emit('update:proxyEndpoint', '')
+}
+
+function toggleStatsProxyOverride(): void {
+  emit(
+    'update:statsProxyMode',
+    proxyOverrideToggleMode(props.statsProxy, statsProxyRow.value.overridden),
+  )
+  emit('update:statsProxyEndpoint', '')
 }
 
 function cloneDraft(): SettingsDraft {
@@ -175,11 +187,11 @@ function timeoutError(key: TimeoutSettingKey): string | undefined {
       </SettingRow>
       <SettingRow
         :label="t('common.proxy.title')"
-        :value="proxyValue"
-        :source-label="proxySourceLabel"
-        :action-label="proxyActionLabel"
-        :overridden="proxyOverridden"
-        :pending-restore="proxyPendingRestore"
+        :value="proxyRow.value"
+        :source-label="proxyRow.sourceLabel"
+        :action-label="proxyRow.actionLabel"
+        :overridden="proxyRow.overridden"
+        :pending-restore="proxyRow.pendingRestore"
         :disabled="disabled"
         @toggle="toggleProxyOverride"
       >
@@ -191,6 +203,28 @@ function timeoutError(key: TimeoutSettingKey): string | undefined {
             :disabled="disabled"
             @update:mode="emit('update:proxyMode', $event)"
             @update:endpoint="emit('update:proxyEndpoint', $event)"
+          />
+        </template>
+      </SettingRow>
+      <SettingRow
+        :label="t('settings.runtime.statsProxy')"
+        :value="statsProxyRow.value"
+        :help="t('settings.runtime.statsProxyHelp')"
+        :source-label="statsProxyRow.sourceLabel"
+        :action-label="statsProxyRow.actionLabel"
+        :overridden="statsProxyRow.overridden"
+        :pending-restore="statsProxyRow.pendingRestore"
+        :disabled="disabled"
+        @toggle="toggleStatsProxyOverride"
+      >
+        <template #control>
+          <ProxyOverrideControl
+            :base="statsProxy"
+            :mode="statsProxyMode"
+            :endpoint="statsProxyEndpoint"
+            :disabled="disabled"
+            @update:mode="emit('update:statsProxyMode', $event)"
+            @update:endpoint="emit('update:statsProxyEndpoint', $event)"
           />
         </template>
       </SettingRow>

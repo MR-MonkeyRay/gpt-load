@@ -460,6 +460,12 @@ function toggleAttemptErrorMessage(sequence: number): void {
               }}</small>
             </dd>
           </div>
+          <div v-if="log.turn_state" class="log-detail__wide">
+            <dt>{{ t('monitor.logs.columns.state') }}</dt>
+            <dd>
+              <code class="log-detail__turn-state">{{ log.turn_state }}</code>
+            </dd>
+          </div>
         </dl>
       </section>
 
@@ -908,6 +914,11 @@ function toggleAttemptErrorMessage(sequence: number): void {
 
 .log-detail__wide {
   grid-column: 1 / -1;
+}
+
+.log-detail__turn-state {
+  font-family: var(--font-mono);
+  font-size: var(--text-label-xs);
 }
 
 .log-error-message {

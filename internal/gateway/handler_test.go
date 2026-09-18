@@ -5286,6 +5286,17 @@ func newHandlerForTestWithStats(
 	upstreamKeys ...string,
 ) (*Handler, *state.Manager, *state.CredentialRegistry) {
 	t.Helper()
+	return newHandlerForTestWithModel(t, forwarder, stats, "gpt-4o", upstreamKeys...)
+}
+
+func newHandlerForTestWithModel(
+	t *testing.T,
+	forwarder AttemptForwarder,
+	stats *health.StatsStore,
+	model string,
+	upstreamKeys ...string,
+) (*Handler, *state.Manager, *state.CredentialRegistry) {
+	t.Helper()
 	gin.SetMode(gin.TestMode)
 	keyService := encryptiontest.Service(t, "handler-test-master-key")
 	manager := state.NewManager()
@@ -5304,7 +5315,7 @@ func newHandlerForTestWithStats(
 		ChannelRegistry: channel.NewRegistry(),
 		Groups: []state.GroupConfig{{ConnectionType: "api_key", ID: 1, Name: "openai", ChannelID: channel.OpenAI,
 			Params: json.RawMessage(`{}`),
-			Models: []state.ModelConfig{{ID: "gpt-4o"}}, Enabled: true,
+			Models: []state.ModelConfig{{ID: model}}, Enabled: true,
 		}},
 		Credentials: credentialConfigs,
 		AccessKeys: []state.AccessKeyConfig{{

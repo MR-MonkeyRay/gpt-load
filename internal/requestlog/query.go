@@ -339,6 +339,7 @@ func decodeRequestLogRows(rows []models.RequestLog) ([]Record, error) {
 			ErrorSummary:          row.ErrorSummary,
 			AffinityHit:           row.AffinityHit,
 			AffinityKind:          row.AffinityKind,
+			TurnState:             row.TurnState,
 			Reasoning: reasoning.Config{
 				Mode:         row.ReasoningMode,
 				Effort:       row.ReasoningEffort,

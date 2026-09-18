@@ -944,6 +944,7 @@ export default {
       columns: {
         time: '時刻',
         modelProtocol: 'モデル / プロトコル',
+        state: 'State',
         response: '応答',
         cost: 'コスト',
         tokens: 'Tokens',

@@ -534,6 +534,27 @@ func (s *Server) handleRefreshGroupCredentialObservation(c *gin.Context) {
 	response.SuccessI18n(c, "common.success", result)
 }
 
+func (s *Server) handleRefreshGroupCredentialStats(c *gin.Context) {
+	groupID, ok := groupID(c, "refresh_group_credential_stats")
+	if !ok {
+		return
+	}
+	credentialID, ok := credentialID(c, "refresh_group_credential_stats")
+	if !ok {
+		return
+	}
+	if err := bindOptionalEmptyJSONObject(c); err != nil {
+		writeServiceError(c, "refresh_group_credential_stats", mapControlJSONError(err))
+		return
+	}
+	result, err := s.service.RefreshCredentialStats(c.Request.Context(), groupID, credentialID)
+	if err != nil {
+		writeServiceError(c, "refresh_group_credential_stats", err)
+		return
+	}
+	response.SuccessI18n(c, "common.success", result)
+}
+
 func (s *Server) handleRefreshGroupCredential(c *gin.Context) {
 	groupID, ok := groupID(c, "refresh_group_credential")
 	if !ok {

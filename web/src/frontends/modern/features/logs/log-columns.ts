@@ -28,6 +28,7 @@ export const logColumnIds = [
   'upstream_protocol',
   'route_mode',
   'affinity_hit',
+  'turn_state',
   'reasoning_mode',
   'cache_hit_rate',
   'cache_write_tokens',
@@ -80,6 +81,7 @@ const definitions: readonly [LogColumnId, number, LogColumnSection, boolean, boo
     ['estimated_cost_nano_usd', 76, 'billing', true],
     // 用户额外选择的字段统一追加，不打断默认列和错误摘要区域。
     ['request_id', 180, 'request', false],
+    ['turn_state', 160, 'routing', false, true],
     ['operation', 88, 'request', false],
     ['upstream_reported_model', 152, 'models', false, true],
     ['error_code', 132, 'result', false],

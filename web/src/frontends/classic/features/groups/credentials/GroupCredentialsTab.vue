@@ -43,6 +43,7 @@ import {
   restoreCredential,
   restoreTestedCredential,
   refreshCredentialObservation,
+  refreshCredentialStats,
   testCredentialConnection,
   updateCredential,
 } from '@/app/resources/credentials'
@@ -734,6 +735,36 @@ async function refreshCredentialToken(item: CredentialItemDto): Promise<void> {
     await Promise.allSettled([refetchActiveCredentialPage(), refetchGroupSummary()])
   } finally {
     setPending(item.credential_id, 'refresh-credential', false)
+  }
+}
+
+// 手动刷新只回填凭据的 turn_state，凭据行本身不变，因此不刷新列表也不改写缓存。
+const turnStateDisplayLimit = 24
+function truncateTurnState(value: string): string {
+  return value.length > turnStateDisplayLimit ? `${value.slice(0, turnStateDisplayLimit)}…` : value
+}
+
+async function refreshStats(item: CredentialItemDto): Promise<void> {
+  if (pending(item.credential_id)) return
+  feedback.value = ''
+  setPending(item.credential_id, 'stats-refresh', true)
+  try {
+    const result = await refreshCredentialStats(client, props.groupId, item.credential_id)
+    toast.show({
+      message: t('group.credentials.subscription.refreshStatsSucceeded', {
+        state: truncateTurnState(result.turn_state),
+      }),
+      tone: 'success',
+    })
+  } catch (cause) {
+    toast.show({
+      message: t(
+        presentSubscriptionErrorKey(cause, 'group.credentials.subscription.refreshStatsFailed'),
+      ),
+      tone: 'danger',
+    })
+  } finally {
+    setPending(item.credential_id, 'stats-refresh', false)
   }
 }
 
@@ -1843,6 +1874,7 @@ async function runBatch(
               @reset="openResetCreditDialog"
               @download="downloadCredentialFile"
               @refresh-credential="refreshCredentialToken"
+              @refresh-stats="refreshStats"
               @remove="
                 deleteTarget = {
                   ids: [$event.credential_id],

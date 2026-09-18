@@ -138,6 +138,8 @@ const display = computed(() => {
     case 'error_summary':
     case 'request_id':
       return row[column] || '—'
+    case 'turn_state':
+      return row.turn_state || '—'
     default:
       return valueName(row[column as 'client_model'])
   }
@@ -257,6 +259,7 @@ const hint = computed(() => {
       'modern-log-number':
         table &&
         (tokenValue !== undefined || column === 'duration_ms' || column === 'first_response_ms'),
+      'modern-log-state': column === 'turn_state',
     }"
   />
 </template>
@@ -315,6 +318,10 @@ const hint = computed(() => {
   font-family: var(--modern-font-mono);
   font-size: var(--modern-font-size-small);
   font-variant-numeric: tabular-nums;
+}
+.modern-log-state {
+  font-family: var(--modern-font-mono);
+  font-size: var(--modern-font-size-caption);
 }
 .modern-log-amount {
   font-family: var(--modern-font-mono);

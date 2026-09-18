@@ -197,8 +197,25 @@ func (s *Service) loadGlobalProxyConfig(
 	ctx context.Context,
 	db *gorm.DB,
 ) (*outboundproxy.Config, error) {
+	return s.loadSystemProxyConfig(ctx, db, outboundproxy.SystemSettingKey)
+}
+
+// loadGlobalStatsProxyConfig loads the dedicated stats-refresh proxy override.
+// An absent row means the stats policy inherits the global effective proxy.
+func (s *Service) loadGlobalStatsProxyConfig(
+	ctx context.Context,
+	db *gorm.DB,
+) (*outboundproxy.Config, error) {
+	return s.loadSystemProxyConfig(ctx, db, outboundproxy.StatsSystemSettingKey)
+}
+
+func (s *Service) loadSystemProxyConfig(
+	ctx context.Context,
+	db *gorm.DB,
+	key string,
+) (*outboundproxy.Config, error) {
 	var row models.SystemSetting
-	err := globalProxyConfigScope(db.WithContext(ctx)).
+	err := systemProxyConfigScope(db.WithContext(ctx), key).
 		Take(&row).Error
 	if errors.Is(err, gorm.ErrRecordNotFound) {
 		return nil, nil
@@ -210,9 +227,48 @@ func (s *Service) loadGlobalProxyConfig(
 }
 
 func globalProxyConfigScope(db *gorm.DB) *gorm.DB {
+	return systemProxyConfigScope(db, outboundproxy.SystemSettingKey)
+}
+
+func systemProxyConfigScope(db *gorm.DB, key string) *gorm.DB {
 	return db.Model(&models.SystemSetting{}).
 		Select("key", "value").
-		Where(&models.SystemSetting{Key: outboundproxy.SystemSettingKey})
+		Where(&models.SystemSetting{Key: key})
+}
+
+// resolveStatsProxy applies the stats-refresh precedence: an explicit stats
+// override when present, otherwise the global effective proxy policy.
+func (s *Service) resolveStatsProxy(
+	ctx context.Context,
+	db *gorm.DB,
+) (outboundproxy.Effective, error) {
+	configured, err := s.loadGlobalStatsProxyConfig(ctx, db)
+	if err != nil {
+		return outboundproxy.Effective{}, err
+	}
+	if configured == nil {
+		global, err := s.loadGlobalProxyConfig(ctx, db)
+		if err != nil {
+			return outboundproxy.Effective{}, err
+		}
+		configured = global
+	}
+	effective, err := outboundproxy.Resolve(nil, nil, configured, s.environmentProxy)
+	if err != nil {
+		return outboundproxy.Effective{}, app_errors.ErrInternalServer
+	}
+	return effective, nil
+}
+
+func (s *Service) statsNetworkContext(
+	ctx context.Context,
+	db *gorm.DB,
+) (subscriptionruntime.NetworkContext, error) {
+	effective, err := s.resolveStatsProxy(ctx, db)
+	if err != nil {
+		return subscriptionruntime.NetworkContext{}, err
+	}
+	return s.proxyNetworkContext(effective)
 }
 
 func (s *Service) resolveGroupProxy(

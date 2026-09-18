@@ -68,6 +68,7 @@ type requestRecorder struct {
 	usageDiagnostics     usage.Diagnostics
 	affinityHit          bool
 	affinityKind         string
+	turnState            string
 	attempts             []telemetry.Attempt
 	attemptPricing       []frozenAttemptPricing
 	pendingPricing       frozenAttemptPricing
@@ -149,6 +150,7 @@ func (recorder *requestRecorder) emit() {
 		DurationMs:            duration.Milliseconds(),
 		AffinityHit:           recorder.affinityHit,
 		AffinityKind:          recorder.affinityKind,
+		TurnState:             recorder.turnState,
 		Reasoning:             recorder.reasoning,
 		Operation:             recorder.operation,
 		Attempts:              append([]telemetry.Attempt(nil), recorder.attempts...),
@@ -185,6 +187,14 @@ func (recorder *requestRecorder) setAffinityHit(hit bool, kind string) {
 	if recorder != nil && hit {
 		recorder.affinityHit = true
 		recorder.affinityKind = kind
+	}
+}
+
+// setTurnState records the turn state actually injected upstream. Only a
+// non-empty value overwrites, so the last injected attempt wins.
+func (recorder *requestRecorder) setTurnState(value string) {
+	if recorder != nil && value != "" {
+		recorder.turnState = value
 	}
 }
 

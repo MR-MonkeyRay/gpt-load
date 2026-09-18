@@ -129,6 +129,7 @@ func mapEvent(
 		ErrorSummary:            sanitizeSummary(redactor, event.ErrorSummary),
 		AffinityHit:             event.AffinityHit,
 		AffinityKind:            event.AffinityKind,
+		TurnState:               event.TurnState,
 		ReasoningMode:           event.Reasoning.Mode,
 		ReasoningEffort:         event.Reasoning.Effort,
 		ReasoningBudgetTokens:   event.Reasoning.BudgetTokens,

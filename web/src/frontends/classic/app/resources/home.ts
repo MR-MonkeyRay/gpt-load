@@ -12,7 +12,7 @@ import { InvalidResponseError } from '@shared/http/errors'
 import { controlQueryKeys } from '@/app/query-keys'
 
 import { projectAccessKeyCollectionItem } from './access-keys'
-import type { ChannelCapabilitiesDto } from './channels'
+import { channelCredentialActions, type ChannelCapabilitiesDto } from './channels'
 import { projectCredentialItem } from './credentials'
 
 import {
@@ -280,7 +280,7 @@ function projectHomeSubscriptionCapabilities(value: unknown): ChannelCapabilitie
   const record = projectRecord(value)
   assertNoSecretLikeFields(record, subscriptionCapabilitiesFields)
   const actions = projectArray(record.credential_actions, (action) =>
-    projectEnum(action, ['reset_credit'] as const),
+    projectEnum(action, channelCredentialActions),
   )
   if (new Set(actions).size !== actions.length) invalidResponse()
   return {

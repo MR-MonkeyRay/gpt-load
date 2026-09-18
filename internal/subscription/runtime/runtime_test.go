@@ -66,6 +66,13 @@ func (testResetCredit) Consume(context.Context, Credential, Target, string) (Res
 	return ResetCreditResult{}, nil
 }
 
+type testStatsProbe struct{ id spec.ActionID }
+
+func (value testStatsProbe) ID() spec.ActionID { return value.id }
+func (testStatsProbe) ProbeTurnState(context.Context, Credential, Target, StatsProbeRequest) (StatsProbeResult, error) {
+	return StatsProbeResult{}, nil
+}
+
 type testBrowserDriver struct{ duplicateDriver }
 
 func (testBrowserDriver) BeginAuthorization() (Authorization, error) { return Authorization{}, nil }
@@ -75,36 +82,38 @@ func (testBrowserDriver) CompleteAuthorization(context.Context, AuthorizationCom
 func (testBrowserDriver) AuthorizationFailureDefinitive(error) bool { return false }
 func (testBrowserDriver) LocalCallback() (LocalCallbackSpec, bool)  { return LocalCallbackSpec{}, false }
 
-func completeTestRuntimeImplementations() ([]Driver, []ModelDiscovery, []QuotaObservation, []ResetCreditAction) {
+func completeTestRuntimeImplementations() ([]Driver, []ModelDiscovery, []QuotaObservation, []ResetCreditAction, []StatsProbe) {
 	return []Driver{
-		testBrowserDriver{duplicateDriver{id: modules.CodexSubscriptionDriver}},
-		testBrowserDriver{duplicateDriver{id: modules.ClaudeSubscriptionDriver}},
-		testBrowserDriver{duplicateDriver{id: modules.AntigravitySubscriptionDriver}},
-		duplicateDriver{id: modules.GrokSubscriptionDriver},
-	}, []ModelDiscovery{
-		testDiscovery{id: modules.CodexModelDiscovery},
-		testDiscovery{id: modules.ClaudeModelDiscovery},
-		testDiscovery{id: modules.AntigravityModelDiscovery},
-		testDiscovery{id: modules.GrokModelDiscovery},
-	}, []QuotaObservation{
-		testObservation{id: modules.CodexQuotaObservation},
-		testObservation{id: modules.ClaudeQuotaObservation},
-		testObservation{id: modules.AntigravityQuotaObservation},
-	}, []ResetCreditAction{
-		testResetCredit{id: modules.CodexResetCreditAction},
-	}
+			testBrowserDriver{duplicateDriver{id: modules.CodexSubscriptionDriver}},
+			testBrowserDriver{duplicateDriver{id: modules.ClaudeSubscriptionDriver}},
+			testBrowserDriver{duplicateDriver{id: modules.AntigravitySubscriptionDriver}},
+			duplicateDriver{id: modules.GrokSubscriptionDriver},
+		}, []ModelDiscovery{
+			testDiscovery{id: modules.CodexModelDiscovery},
+			testDiscovery{id: modules.ClaudeModelDiscovery},
+			testDiscovery{id: modules.AntigravityModelDiscovery},
+			testDiscovery{id: modules.GrokModelDiscovery},
+		}, []QuotaObservation{
+			testObservation{id: modules.CodexQuotaObservation},
+			testObservation{id: modules.ClaudeQuotaObservation},
+			testObservation{id: modules.AntigravityQuotaObservation},
+		}, []ResetCreditAction{
+			testResetCredit{id: modules.CodexResetCreditAction},
+		}, []StatsProbe{
+			testStatsProbe{id: modules.CodexStatsProbe},
+		}
 }
 
 func TestRuntimeRejectsDeviceOAuthWithoutDriverSupport(t *testing.T) {
-	drivers, discoveries, observations, actions := completeTestRuntimeImplementations()
-	_, err := compileRuntime(channel.NewRegistry(), drivers, discoveries, observations, actions)
+	drivers, discoveries, observations, actions, probes := completeTestRuntimeImplementations()
+	_, err := compileRuntime(channel.NewRegistry(), drivers, discoveries, observations, actions, probes)
 	if err == nil || !strings.Contains(err.Error(), "device OAuth") {
 		t.Fatalf("compileRuntime() error = %v, want missing device OAuth support", err)
 	}
 }
 
 func TestRuntimeFailsClosedWhenBoundImplementationIsMissing(t *testing.T) {
-	_, err := compileRuntime(channel.NewRegistry(), nil, nil, nil, nil)
+	_, err := compileRuntime(channel.NewRegistry(), nil, nil, nil, nil, nil)
 	if err == nil {
 		t.Fatal("compileRuntime() succeeded without the Codex driver")
 	}
@@ -128,6 +137,7 @@ func TestRuntimeRejectsDuplicateImplementationIDs(t *testing.T) {
 			duplicateDriver{id: modules.CodexSubscriptionDriver},
 			duplicateDriver{id: modules.CodexSubscriptionDriver},
 		},
+		nil,
 		nil,
 		nil,
 		nil,

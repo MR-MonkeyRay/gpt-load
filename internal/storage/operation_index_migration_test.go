@@ -6,7 +6,33 @@ import (
 	"testing"
 
 	"gorm.io/gorm"
+
+	migrationfiles "gpt-load/internal/storage/migrations"
 )
+
+// operationIndexMigration 按 ID 定位操作索引迁移，避免依赖“最后一条迁移”的位置假设。
+func operationIndexMigration(t *testing.T) migration {
+	t.Helper()
+	for _, entry := range migrations {
+		if entry.ID == migrationfiles.ID0017 {
+			return entry
+		}
+	}
+	t.Fatal("operation index migration is missing")
+	return migration{}
+}
+
+// migrationsBeforeOperationIndex 返回操作索引迁移之前的注册表前缀。
+func migrationsBeforeOperationIndex(t *testing.T) []migration {
+	t.Helper()
+	for index, entry := range migrations {
+		if entry.ID == migrationfiles.ID0017 {
+			return migrations[:index]
+		}
+	}
+	t.Fatal("operation index migration is missing")
+	return nil
+}
 
 func TestOperationIndexMigrationContract(t *testing.T) {
 	testOperationIndexMigration(t, openInternalMigrationTestDatabase)
@@ -28,7 +54,7 @@ func testOperationIndexMigration(t *testing.T, open func(*testing.T) *gorm.DB) {
 		t.Run(scenario, func(t *testing.T) {
 			db := open(t)
 			if scenario != "fresh" {
-				if err := applyMigrationRegistry(db, migrations[:len(migrations)-1]); err != nil {
+				if err := applyMigrationRegistry(db, migrationsBeforeOperationIndex(t)); err != nil {
 					t.Fatal(err)
 				}
 				if err := db.Table("request_logs").Create(map[string]any{
@@ -40,14 +66,15 @@ func testOperationIndexMigration(t *testing.T, open func(*testing.T) *gorm.DB) {
 					t.Fatal(err)
 				}
 				if scenario == "interrupted" {
-					registry := append([]migration(nil), migrations...)
-					up := registry[len(registry)-1].Up
-					registry[len(registry)-1].Up = func(tx *gorm.DB) error {
+					interrupted := operationIndexMigration(t)
+					up := interrupted.Up
+					interrupted.Up = func(tx *gorm.DB) error {
 						if err := up(tx); err != nil {
 							return err
 						}
 						return fmt.Errorf("interrupt after operation index DDL")
 					}
+					registry := append(append([]migration(nil), migrationsBeforeOperationIndex(t)...), interrupted)
 					if err := applyMigrationRegistry(db, registry); err == nil {
 						t.Fatal("expected migration interruption")
 					}
@@ -71,7 +98,7 @@ func testOperationIndexMigration(t *testing.T, open func(*testing.T) *gorm.DB) {
 	}
 	t.Run("unexpected index definition", func(t *testing.T) {
 		db := open(t)
-		if err := applyMigrationRegistry(db, migrations[:len(migrations)-1]); err != nil {
+		if err := applyMigrationRegistry(db, migrationsBeforeOperationIndex(t)); err != nil {
 			t.Fatal(err)
 		}
 		if err := db.Exec("CREATE INDEX idx_request_logs_operation_completed_id ON request_logs (status)").Error; err != nil {
@@ -83,7 +110,7 @@ func testOperationIndexMigration(t *testing.T, open func(*testing.T) *gorm.DB) {
 	})
 	t.Run("unexpected index direction", func(t *testing.T) {
 		db := open(t)
-		if err := applyMigrationRegistry(db, migrations[:len(migrations)-1]); err != nil {
+		if err := applyMigrationRegistry(db, migrationsBeforeOperationIndex(t)); err != nil {
 			t.Fatal(err)
 		}
 		if err := db.Exec(

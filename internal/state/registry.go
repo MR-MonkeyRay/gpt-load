@@ -45,6 +45,7 @@ type CredentialEntry struct {
 	EncryptedValue          string
 	EncryptedProxy          string
 	ProxyFingerprint        string
+	TurnState               string
 	quotaRemaining          *float64
 	quotaResetAt            time.Time
 }
@@ -67,6 +68,7 @@ type CredentialRef struct {
 	EncryptedValue          string
 	EncryptedProxy          string
 	ProxyFingerprint        string
+	TurnState               string
 	FailureGeneration       uint64
 	ModelCooldownGeneration uint64
 }
@@ -543,6 +545,23 @@ func (r *CredentialRegistry) SetCredentialAuthState(credentialID uint, authState
 	return true
 }
 
+// SetCredentialTurnState publishes a captured turn state for one credential.
+// The value is mutable runtime state and intentionally not part of credential
+// identity, so in-flight requests are never invalidated by a refresh.
+func (r *CredentialRegistry) SetCredentialTurnState(credentialID uint, turnState string) bool {
+	if credentialID == 0 {
+		return false
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	entry, ok := r.entryLocked(credentialID)
+	if !ok {
+		return false
+	}
+	entry.TurnState = turnState
+	return true
+}
+
 // CredentialAuthStateOf returns the runtime auth state of one credential.
 func (r *CredentialRegistry) CredentialAuthStateOf(credentialID uint) (CredentialAuthState, bool) {
 	r.mu.RLock()
@@ -600,6 +619,7 @@ func (r *CredentialRegistry) CaptureActiveCredentialRefs(groupIDs []uint) []Cred
 				Version: entry.Version, IdentityGeneration: entry.IdentityGeneration,
 				Fingerprint: entry.Fingerprint, EncryptedValue: entry.EncryptedValue,
 				EncryptedProxy: entry.EncryptedProxy, ProxyFingerprint: entry.ProxyFingerprint,
+				TurnState:               entry.TurnState,
 				FailureGeneration:       entry.FailureGeneration,
 				ModelCooldownGeneration: entry.ModelCooldownGeneration,
 			})
@@ -668,7 +688,8 @@ func (r *CredentialRegistry) CredentialRef(credentialID uint) (CredentialRef, bo
 		ID: entry.ID, GroupID: entry.GroupID, Version: entry.Version,
 		IdentityGeneration: entry.IdentityGeneration, Fingerprint: entry.Fingerprint,
 		EncryptedValue: entry.EncryptedValue, EncryptedProxy: entry.EncryptedProxy,
-		ProxyFingerprint: entry.ProxyFingerprint, FailureGeneration: entry.FailureGeneration,
+		ProxyFingerprint: entry.ProxyFingerprint, TurnState: entry.TurnState,
+		FailureGeneration:       entry.FailureGeneration,
 		ModelCooldownGeneration: entry.ModelCooldownGeneration,
 	}, true
 }
@@ -1001,6 +1022,7 @@ func (r *CredentialRegistry) BlacklistedCredentials() []CredentialRef {
 				Version: entry.Version, IdentityGeneration: entry.IdentityGeneration,
 				Fingerprint: entry.Fingerprint, EncryptedValue: entry.EncryptedValue,
 				EncryptedProxy: entry.EncryptedProxy, ProxyFingerprint: entry.ProxyFingerprint,
+				TurnState:               entry.TurnState,
 				FailureGeneration:       entry.FailureGeneration,
 				ModelCooldownGeneration: entry.ModelCooldownGeneration,
 			})

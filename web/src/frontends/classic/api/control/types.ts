@@ -252,6 +252,12 @@ export interface CredentialObservationDto {
   last_error_code?: string
 }
 
+export interface CredentialStatsRefreshDto {
+  turn_state: string
+  attempts: number
+  refreshed_at_ms: number
+}
+
 export interface CredentialResetCreditConsumeDto {
   status: 'succeeded'
   windows_reset: number

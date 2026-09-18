@@ -1190,6 +1190,7 @@ func (handler *Handler) executeAttempts(
 			),
 			Proxy:                  effectiveProxy,
 			ProxyFingerprint:       proxyFingerprint,
+			CredentialTurnState:    ref.TurnState,
 			ForceCredentialRefresh: forceCredentialRefresh,
 			ContinuityKey:          requestAffinity.continuityKey,
 			OnResponse:             handler.responseBindingObserver(recorder.accessKeyID, selection, ref, prepared.request),
@@ -1198,6 +1199,7 @@ func (handler *Handler) executeAttempts(
 			},
 		}
 		if recorder != nil {
+			recorder.setTurnState(turnStateHeaderValue(input))
 			recorder.freezeNextAttemptPricing(
 				handler.freezeAttemptPricing(
 					selection,

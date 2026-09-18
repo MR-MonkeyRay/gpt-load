@@ -78,6 +78,7 @@ const sectionFields: Record<SectionID, readonly SettingKey[]> = {
   routing: ['route_strategy', 'affinity_enabled', 'affinity_ttl', 'affinity_capacity'],
   connection: [
     'proxy_config',
+    'stats_proxy_config',
     'responses_websocket_enabled',
     'first_byte_timeout',
     'request_timeout',
@@ -491,6 +492,60 @@ onScopeDispose(() => {
                       <span v-else>{{
                         t(
                           base.values.proxy_config.effective_mode === 'environment'
+                            ? 'settingsForm.proxy.environment'
+                            : 'settingsForm.proxy.directValue',
+                        )
+                      }}</span>
+                    </p>
+                  </div>
+                </template>
+              </SettingItem>
+              <SettingItem
+                v-if="matches('stats_proxy_config')"
+                v-bind="settingItem('stats_proxy_config')"
+                :description="t('settingsForm.hints.stats_proxy_config')"
+                wrap-control
+                class="modern-settings-block"
+                @reset="restore('stats_proxy_config')"
+                @undo="undoRestore('stats_proxy_config')"
+              >
+                <AppSegmentedControl
+                  id="settings-stats_proxy_config"
+                  :model-value="draft.stats_proxy_config.mode"
+                  :label="t('settingsForm.fields.stats_proxy_config')"
+                  :options="proxyOptions"
+                  appearance="field"
+                  :disabled="disabled('stats_proxy_config')"
+                  @update:model-value="
+                    draft.stats_proxy_config.mode =
+                      $event === 'custom' || $event === 'direct' ? $event : 'inherit'
+                  "
+                />
+                <template #details>
+                  <div class="modern-settings-proxy">
+                    <AppTextField
+                      v-if="draft.stats_proxy_config.mode === 'custom'"
+                      v-model="draft.stats_proxy_config.url"
+                      :label="t('settingsForm.proxy.url')"
+                      :disabled="disabled('stats_proxy_config')"
+                      :error="fieldErrors.stats_proxy_config"
+                      :placeholder="
+                        base.values.stats_proxy_config.configured_mode === 'custom'
+                          ? t('settingsForm.proxy.existing')
+                          : t('settingsForm.proxy.placeholder')
+                      "
+                      autocomplete="off"
+                      spellcheck="false"
+                    />
+                    <p class="modern-settings-proxy-effective">
+                      <span>{{ t('settingsForm.proxy.effective') }}</span>
+                      <AppCopyValue
+                        v-if="base.values.stats_proxy_config.display_url"
+                        :value="base.values.stats_proxy_config.display_url"
+                      />
+                      <span v-else>{{
+                        t(
+                          base.values.stats_proxy_config.effective_mode === 'environment'
                             ? 'settingsForm.proxy.environment'
                             : 'settingsForm.proxy.directValue',
                         )

@@ -287,6 +287,7 @@ type CapabilityBindings struct {
 	ModelDiscovery     UtilityID
 	QuotaObservation   UtilityID
 	ResetCreditAction  ActionID
+	StatsProbe         ActionID
 }
 
 // Definition is the complete, code-owned declaration for one channel. Every

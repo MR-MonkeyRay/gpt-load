@@ -2,6 +2,7 @@
 import { computed } from 'vue'
 import { useI18n } from 'vue-i18n'
 import type { CredentialRow } from '@modern/api/group-detail'
+import type { GroupChannel } from '@modern/api/group-create'
 import {
   AppBadge,
   AppButton,
@@ -21,6 +22,7 @@ const props = defineProps<{
   row: CredentialRow
   selected: boolean
   disabled: boolean
+  channel?: GroupChannel
   pending?: boolean
   error?: string
   resolveSecret: () => Promise<string>
@@ -92,6 +94,7 @@ const issues = computed(() =>
       <div class="modern-api-card-actions">
         <CredentialCardActions
           :row="row"
+          :channel="channel"
           :disabled="disabled"
           @action="$emit('action', $event)"
         /><AppSwitch

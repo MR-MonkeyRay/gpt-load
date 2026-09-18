@@ -333,6 +333,7 @@ func (s *websocketConnection) executeTurn(turn websocketTurn) {
 		parsed.Header.Del("Origin")
 		input := ForwardInput{Dialect: dialect.NewOpenAIResponses(), ObserveUsage: effective.metadata.ObserveUsage, Group: selection.Group, APIKey: credential.apiKey, CredentialSecrets: credential.secrets, Request: parsed, ExternalModel: model, UpstreamModelID: optionalModelValue(selection.UpstreamModelID), RequestID: id, AttemptID: id + ":" + strconv.Itoa(sequence), AttemptSequence: uint32(sequence), ClientProtocol: protocol.OpenAIResponses, Operation: execution.OperationResponsesCreate, RouteRequirement: execution.RouteRequirementNative, ResponsesStorePreference: original.metadata.ResponsesStorePreference, ChannelID: string(selection.ChannelID), RouteMode: execution.RouteNative, TargetConfig: selection.ResolvedTarget.TargetConfig, Credential: execution.NewCredentialSnapshot(ref.ID, ref.Version, ref.IdentityGeneration, credential.payload), Proxy: proxy, ProxyFingerprint: fingerprint}
 		input.ForceCredentialRefresh = forceCredentialRefresh
+		input.CredentialTurnState = ref.TurnState
 		spec, err := newExecutionAttemptSpec(input)
 		if err != nil {
 			reject(reasonInvalidProtocolRequest)
@@ -364,6 +365,7 @@ func (s *websocketConnection) executeTurn(turn websocketTurn) {
 			admission.admitted = true
 		}
 		recorder.setReasoning(effective.metadata.Reasoning)
+		recorder.setTurnState(turnStateHeaderValue(input))
 		recorder.setUsageApplicable(effective.metadata.ObserveUsage)
 		recorder.setPricingMode(effective.metadata.PricingMode)
 		recorder.setUsageDiagnostics(effective.metadata.UsageDiagnostics)

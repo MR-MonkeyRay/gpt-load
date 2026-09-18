@@ -20,7 +20,8 @@ export type ChannelFieldInputKind = 'text' | 'url' | 'secret'
 export type ChannelConnectionType = 'api_key' | 'subscription'
 const authorizationMethods = ['browser_oauth', 'device_oauth', 'oauth_file'] as const
 export type ChannelAuthorizationMethod = (typeof authorizationMethods)[number]
-export type ChannelCredentialAction = 'reset_credit'
+export const channelCredentialActions = ['reset_credit', 'stats_refresh'] as const
+export type ChannelCredentialAction = (typeof channelCredentialActions)[number]
 export type ChannelNoticeID = 'claude_oauth_risk' | 'antigravity_oauth_risk'
 export type ChannelNoticeTone = 'warning'
 
@@ -138,7 +139,6 @@ const capabilityFields = [
   'credential_actions',
   'outbound_proxy',
 ] as const
-const credentialActions = ['reset_credit'] as const
 const noticeFields = ['id', 'tone'] as const
 const noticeIDs = ['claude_oauth_risk', 'antigravity_oauth_risk'] as const
 const noticeTones = ['warning'] as const
@@ -231,7 +231,7 @@ function projectCapabilities(value: unknown): ChannelCapabilitiesDto {
   const record = projectRecord(value)
   assertNoSecretLikeFields(record, capabilityFields)
   const actions = projectArray(record.credential_actions, (action) =>
-    projectEnum(action, credentialActions),
+    projectEnum(action, channelCredentialActions),
   )
   if (new Set(actions).size !== actions.length) invalidResponse()
   return {

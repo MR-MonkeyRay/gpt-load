@@ -740,6 +740,23 @@ func executionRepresentationFailure(result UpstreamResult, err error) UpstreamRe
 	}
 }
 
+// turnStateHeaderValue returns the captured turn state to replay for one
+// attempt. The value is bound to the dedicated codex turn-state model only and
+// is never injected for any other model.
+func turnStateHeaderValue(input ForwardInput) string {
+	if input.CredentialTurnState == "" {
+		return ""
+	}
+	model := input.UpstreamModelID
+	if model == "" {
+		model = input.ExternalModel
+	}
+	if model != execution.CodexTurnStateModel {
+		return ""
+	}
+	return input.CredentialTurnState
+}
+
 func newExecutionAttemptSpec(input ForwardInput) (execution.AttemptSpec, error) {
 	if input.Request == nil {
 		return execution.AttemptSpec{}, fmt.Errorf("request is required")
@@ -754,6 +771,9 @@ func newExecutionAttemptSpec(input ForwardInput) (execution.AttemptSpec, error) 
 	}
 	sanitizeUpstreamRequestHeaders(headers)
 	headers.Set("Accept-Encoding", "identity")
+	if turnState := turnStateHeaderValue(input); turnState != "" {
+		headers.Set(execution.CodexTurnStateHeader, turnState)
+	}
 	spec := execution.NewAttemptSpec(execution.AttemptSpec{
 		RequestID:                input.RequestID,
 		AttemptID:                input.AttemptID,

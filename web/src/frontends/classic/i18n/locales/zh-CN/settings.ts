@@ -64,6 +64,8 @@ export default {
       responses_websocket_enabled: 'Responses WebSocket',
       websocketHelp:
         '分组可覆盖此开关；关闭会立即断开受影响的 WS 连接并中断生成，HTTP/SSE 不受影响。',
+      statsProxy: 'Stats代理',
+      statsProxyHelp: '用于手动刷新凭证 stats 的出站代理；未设置时使用全局出站代理。',
       first_byte_timeout: '原生响应 / 流式首事件超时',
       request_timeout: '单次上游请求超时',
       stream_idle_timeout: '流空闲超时',

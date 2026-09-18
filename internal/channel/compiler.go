@@ -546,8 +546,8 @@ func publicCapabilities(
 	if source.ResetCreditAction != "" {
 		result.CredentialActions = append(result.CredentialActions, CredentialActionResetCredit)
 	}
-	if source.StatsProbe != "" {
-		result.CredentialActions = append(result.CredentialActions, CredentialActionStatsRefresh)
+	if source.StateProbe != "" {
+		result.CredentialActions = append(result.CredentialActions, CredentialActionStateRefresh)
 	}
 	for _, route := range routes {
 		if route.Operation == execution.OperationListModels {

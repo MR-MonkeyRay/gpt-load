@@ -873,19 +873,19 @@ func TestConcurrentSettingsUpdatesPublishDatabaseTruth(t *testing.T) {
 	}
 }
 
-func TestSettingsStatsProxyInheritsGlobalUntilOverridden(t *testing.T) {
+func TestSettingsStateProxyInheritsGlobalUntilOverridden(t *testing.T) {
 	t.Parallel()
 	fixture := newServiceFixture(t)
-	const endpoint = "http://stats-user:stats-password@stats.example.com:8080"
+	const endpoint = "http://state-user:state-password@state.example.com:8080"
 
 	inherited, err := fixture.service.GetSettings(t.Context())
 	if err != nil {
 		t.Fatalf("GetSettings() error = %v", err)
 	}
-	if inherited.Values.StatsProxyConfig.ConfiguredMode != outboundproxy.ModeInherit ||
-		inherited.Values.StatsProxyConfig.EffectiveMode != outboundproxy.ModeDirect ||
-		inherited.Values.StatsProxyConfig.EffectiveSource != outboundproxy.SourceDefault {
-		t.Fatalf("default stats proxy view = %#v", inherited.Values.StatsProxyConfig)
+	if inherited.Values.StateProxyConfig.ConfiguredMode != outboundproxy.ModeInherit ||
+		inherited.Values.StateProxyConfig.EffectiveMode != outboundproxy.ModeDirect ||
+		inherited.Values.StateProxyConfig.EffectiveSource != outboundproxy.SourceDefault {
+		t.Fatalf("default state proxy view = %#v", inherited.Values.StateProxyConfig)
 	}
 
 	global, err := fixture.service.UpdateSettings(t.Context(), SettingsUpdateRequest{
@@ -896,52 +896,52 @@ func TestSettingsStatsProxyInheritsGlobalUntilOverridden(t *testing.T) {
 	if err != nil {
 		t.Fatalf("UpdateSettings(global proxy) error = %v", err)
 	}
-	if view := global.Values.StatsProxyConfig; view.ConfiguredMode != outboundproxy.ModeInherit ||
+	if view := global.Values.StateProxyConfig; view.ConfiguredMode != outboundproxy.ModeInherit ||
 		view.EffectiveMode != outboundproxy.ModeDirect || view.EffectiveSource != outboundproxy.SourceGlobal {
-		t.Fatalf("inherited stats proxy view = %#v", view)
+		t.Fatalf("inherited state proxy view = %#v", view)
 	}
 
 	overridden, err := fixture.service.UpdateSettings(t.Context(), SettingsUpdateRequest{
 		Settings: map[string]json.RawMessage{
-			outboundproxy.StatsSystemSettingKey: json.RawMessage(`{"mode":"custom","url":"` + endpoint + `"}`),
+			outboundproxy.StateSystemSettingKey: json.RawMessage(`{"mode":"custom","url":"` + endpoint + `"}`),
 		},
 	})
 	if err != nil {
-		t.Fatalf("UpdateSettings(stats proxy) error = %v", err)
+		t.Fatalf("UpdateSettings(state proxy) error = %v", err)
 	}
-	view := overridden.Values.StatsProxyConfig
+	view := overridden.Values.StateProxyConfig
 	if view.ConfiguredMode != outboundproxy.ModeCustom || view.EffectiveMode != outboundproxy.ModeCustom ||
 		view.EffectiveSource != outboundproxy.SourceGlobal ||
-		view.DisplayURL != "http://stats-user:******@stats.example.com:8080" || !view.HasAuth {
-		t.Fatalf("stats proxy view = %#v", view)
+		view.DisplayURL != "http://state-user:******@state.example.com:8080" || !view.HasAuth {
+		t.Fatalf("state proxy view = %#v", view)
 	}
 	if overridden.Values.ProxyConfig.ConfiguredMode != outboundproxy.ModeDirect {
-		t.Fatalf("global proxy view changed with the stats override = %#v", overridden.Values.ProxyConfig)
+		t.Fatalf("global proxy view changed with the state override = %#v", overridden.Values.ProxyConfig)
 	}
 	var row models.SystemSetting
-	if err := fixture.db.Where("key = ?", outboundproxy.StatsSystemSettingKey).Take(&row).Error; err != nil {
-		t.Fatalf("read stats proxy setting: %v", err)
+	if err := fixture.db.Where("key = ?", outboundproxy.StateSystemSettingKey).Take(&row).Error; err != nil {
+		t.Fatalf("read state proxy setting: %v", err)
 	}
-	if strings.Contains(row.Value, endpoint) || strings.Contains(row.Value, "stats-password") {
-		t.Fatalf("stats proxy setting stored plaintext: %q", row.Value)
+	if strings.Contains(row.Value, endpoint) || strings.Contains(row.Value, "state-password") {
+		t.Fatalf("state proxy setting stored plaintext: %q", row.Value)
 	}
 
 	reset, err := fixture.service.UpdateSettings(t.Context(), SettingsUpdateRequest{
-		Settings: map[string]json.RawMessage{outboundproxy.StatsSystemSettingKey: json.RawMessage("null")},
+		Settings: map[string]json.RawMessage{outboundproxy.StateSystemSettingKey: json.RawMessage("null")},
 	})
 	if err != nil {
-		t.Fatalf("UpdateSettings(stats proxy null) error = %v", err)
+		t.Fatalf("UpdateSettings(state proxy null) error = %v", err)
 	}
-	if view := reset.Values.StatsProxyConfig; view.ConfiguredMode != outboundproxy.ModeInherit ||
+	if view := reset.Values.StateProxyConfig; view.ConfiguredMode != outboundproxy.ModeInherit ||
 		view.EffectiveSource != outboundproxy.SourceGlobal {
-		t.Fatalf("reset stats proxy view = %#v", view)
+		t.Fatalf("reset state proxy view = %#v", view)
 	}
 	var count int64
 	if err := fixture.db.Model(&models.SystemSetting{}).
-		Where("key = ?", outboundproxy.StatsSystemSettingKey).Count(&count).Error; err != nil {
+		Where("key = ?", outboundproxy.StateSystemSettingKey).Count(&count).Error; err != nil {
 		t.Fatal(err)
 	}
 	if count != 0 {
-		t.Fatalf("stats proxy rows after reset = %d", count)
+		t.Fatalf("state proxy rows after reset = %d", count)
 	}
 }

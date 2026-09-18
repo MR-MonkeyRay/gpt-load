@@ -99,19 +99,19 @@ export async function refreshCredentialQuota(
     }),
   )
 }
-export interface CredentialStatsRefresh {
+export interface CredentialStateRefresh {
   turn_state: string
   attempts: number
   refreshed_at_ms: number
 }
-export async function refreshCredentialStats(
+export async function refreshCredentialState(
   client: ApiClient,
   group: number,
   id: number,
   signal: AbortSignal,
-): Promise<CredentialStatsRefresh> {
+): Promise<CredentialStateRefresh> {
   const data = record(
-    await client.request(`/api/groups/${group}/credentials/${id}/stats-refresh`, {
+    await client.request(`/api/groups/${group}/credentials/${id}/state-refresh`, {
       method: 'POST',
       json: {},
       signal,

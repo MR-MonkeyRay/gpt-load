@@ -69,7 +69,7 @@ const emit = defineEmits<{
   reset: [item: CredentialItemDto]
   download: [item: CredentialItemDto]
   'refresh-credential': [item: CredentialItemDto]
-  'refresh-stats': [item: CredentialItemDto]
+  'refresh-state': [item: CredentialItemDto]
   remove: [item: CredentialItemDto]
   weight: [payload: { item: CredentialItemDto; value: string }]
 }>()
@@ -171,8 +171,8 @@ const needsInitialQuotaSync = computed(
 const supportsResetCredit = computed(() =>
   props.capabilities.credential_actions.includes('reset_credit'),
 )
-const supportsStatsRefresh = computed(() =>
-  props.capabilities.credential_actions.includes('stats_refresh'),
+const supportsStateRefresh = computed(() =>
+  props.capabilities.credential_actions.includes('state_refresh'),
 )
 const snapshot = computed(() => observation.value?.snapshot)
 function isAccountWideQuotaWindow(window: CredentialQuotaWindowDto): boolean {
@@ -607,7 +607,7 @@ function retryDetails(): void {
 }
 
 function runMenuAction(
-  action: 'download' | 'refresh-credential' | 'refresh-stats' | 'toggle' | 'restore' | 'remove',
+  action: 'download' | 'refresh-credential' | 'refresh-state' | 'toggle' | 'restore' | 'remove',
 ): void {
   menuOpen.value = false
   switch (action) {
@@ -617,8 +617,8 @@ function runMenuAction(
     case 'refresh-credential':
       emit('refresh-credential', props.item)
       return
-    case 'refresh-stats':
-      emit('refresh-stats', props.item)
+    case 'refresh-state':
+      emit('refresh-state', props.item)
       return
     case 'toggle':
       emit('toggle', props.item)
@@ -857,13 +857,13 @@ function runMenuAction(
                   }}
                 </button>
                 <button
-                  v-if="supportsStatsRefresh"
+                  v-if="supportsStateRefresh"
                   type="button"
                   :disabled="busy"
-                  @click="runMenuAction('refresh-stats')"
+                  @click="runMenuAction('refresh-state')"
                 >
                   <Gauge :size="15" aria-hidden="true" />{{
-                    t('group.credentials.subscription.refreshStats')
+                    t('group.credentials.subscription.refreshState')
                   }}
                 </button>
                 <button type="button" :disabled="busy" @click="runMenuAction('toggle')">

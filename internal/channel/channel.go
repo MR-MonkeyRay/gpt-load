@@ -88,7 +88,7 @@ type CredentialAction string
 
 const (
 	CredentialActionResetCredit  CredentialAction = "reset_credit"
-	CredentialActionStatsRefresh CredentialAction = "stats_refresh"
+	CredentialActionStateRefresh CredentialAction = "state_refresh"
 )
 
 // CapabilityDescriptor is the safe public projection of optional channel behavior.

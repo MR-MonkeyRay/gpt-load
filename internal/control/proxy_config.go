@@ -200,13 +200,13 @@ func (s *Service) loadGlobalProxyConfig(
 	return s.loadSystemProxyConfig(ctx, db, outboundproxy.SystemSettingKey)
 }
 
-// loadGlobalStatsProxyConfig loads the dedicated stats-refresh proxy override.
-// An absent row means the stats policy inherits the global effective proxy.
-func (s *Service) loadGlobalStatsProxyConfig(
+// loadGlobalStateProxyConfig loads the dedicated state-refresh proxy override.
+// An absent row means the state policy inherits the global effective proxy.
+func (s *Service) loadGlobalStateProxyConfig(
 	ctx context.Context,
 	db *gorm.DB,
 ) (*outboundproxy.Config, error) {
-	return s.loadSystemProxyConfig(ctx, db, outboundproxy.StatsSystemSettingKey)
+	return s.loadSystemProxyConfig(ctx, db, outboundproxy.StateSystemSettingKey)
 }
 
 func (s *Service) loadSystemProxyConfig(
@@ -236,13 +236,13 @@ func systemProxyConfigScope(db *gorm.DB, key string) *gorm.DB {
 		Where(&models.SystemSetting{Key: key})
 }
 
-// resolveStatsProxy applies the stats-refresh precedence: an explicit stats
+// resolveStateProxy applies the state-refresh precedence: an explicit state
 // override when present, otherwise the global effective proxy policy.
-func (s *Service) resolveStatsProxy(
+func (s *Service) resolveStateProxy(
 	ctx context.Context,
 	db *gorm.DB,
 ) (outboundproxy.Effective, error) {
-	configured, err := s.loadGlobalStatsProxyConfig(ctx, db)
+	configured, err := s.loadGlobalStateProxyConfig(ctx, db)
 	if err != nil {
 		return outboundproxy.Effective{}, err
 	}
@@ -260,11 +260,11 @@ func (s *Service) resolveStatsProxy(
 	return effective, nil
 }
 
-func (s *Service) statsNetworkContext(
+func (s *Service) stateNetworkContext(
 	ctx context.Context,
 	db *gorm.DB,
 ) (subscriptionruntime.NetworkContext, error) {
-	effective, err := s.resolveStatsProxy(ctx, db)
+	effective, err := s.resolveStateProxy(ctx, db)
 	if err != nil {
 		return subscriptionruntime.NetworkContext{}, err
 	}

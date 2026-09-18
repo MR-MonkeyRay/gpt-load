@@ -43,7 +43,7 @@ import {
   restoreCredential,
   restoreTestedCredential,
   refreshCredentialObservation,
-  refreshCredentialStats,
+  refreshCredentialState,
   testCredentialConnection,
   updateCredential,
 } from '@/app/resources/credentials'
@@ -744,14 +744,14 @@ function truncateTurnState(value: string): string {
   return value.length > turnStateDisplayLimit ? `${value.slice(0, turnStateDisplayLimit)}…` : value
 }
 
-async function refreshStats(item: CredentialItemDto): Promise<void> {
+async function refreshState(item: CredentialItemDto): Promise<void> {
   if (pending(item.credential_id)) return
   feedback.value = ''
-  setPending(item.credential_id, 'stats-refresh', true)
+  setPending(item.credential_id, 'state-refresh', true)
   try {
-    const result = await refreshCredentialStats(client, props.groupId, item.credential_id)
+    const result = await refreshCredentialState(client, props.groupId, item.credential_id)
     toast.show({
-      message: t('group.credentials.subscription.refreshStatsSucceeded', {
+      message: t('group.credentials.subscription.refreshStateSucceeded', {
         state: truncateTurnState(result.turn_state),
       }),
       tone: 'success',
@@ -759,12 +759,12 @@ async function refreshStats(item: CredentialItemDto): Promise<void> {
   } catch (cause) {
     toast.show({
       message: t(
-        presentSubscriptionErrorKey(cause, 'group.credentials.subscription.refreshStatsFailed'),
+        presentSubscriptionErrorKey(cause, 'group.credentials.subscription.refreshStateFailed'),
       ),
       tone: 'danger',
     })
   } finally {
-    setPending(item.credential_id, 'stats-refresh', false)
+    setPending(item.credential_id, 'state-refresh', false)
   }
 }
 
@@ -1874,7 +1874,7 @@ async function runBatch(
               @reset="openResetCreditDialog"
               @download="downloadCredentialFile"
               @refresh-credential="refreshCredentialToken"
-              @refresh-stats="refreshStats"
+              @refresh-state="refreshState"
               @remove="
                 deleteTarget = {
                   ids: [$event.credential_id],

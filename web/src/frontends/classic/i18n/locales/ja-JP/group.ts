@@ -565,9 +565,9 @@ export default {
         refreshCredential: '認証情報を更新',
         refreshCredentialSucceeded: '認証情報を更新しました',
         refreshCredentialFailed: '認証情報を更新できません',
-        refreshStats: 'statsを更新',
-        refreshStatsSucceeded: 'statsを更新しました：{state}',
-        refreshStatsFailed: 'statsを更新できません',
+        refreshState: 'Stateを更新',
+        refreshStateSucceeded: 'Stateを更新しました：{state}',
+        refreshStateFailed: 'Stateを更新できません',
         dailySuccessSummary: '24 時間の成功',
         dailyFailureSummary: '24 時間の失敗',
         dailyIncomplete:

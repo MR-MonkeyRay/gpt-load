@@ -95,7 +95,7 @@ export function useSettingsEditor() {
   function owned(key: SettingKey): boolean {
     return Boolean(
       base.value &&
-      (key === 'proxy_config' || key === 'stats_proxy_config'
+      (key === 'proxy_config' || key === 'state_proxy_config'
         ? base.value.values[key].configured_mode !== 'inherit'
         : base.value.overrides.includes(key)),
     )

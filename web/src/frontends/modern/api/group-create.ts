@@ -26,7 +26,7 @@ export interface GroupChannel {
   proxy: boolean
   quotaObservation: boolean
   resetCredit: boolean
-  statsRefresh: boolean
+  stateRefresh: boolean
   parameterProtocols: string[]
   nativeProtocols: string[]
   connectionType: 'api_key' | 'subscription'
@@ -101,7 +101,7 @@ export async function getGroupChannels(
       proxy: boolean(capabilities.outbound_proxy),
       quotaObservation: boolean(capabilities.quota_observation),
       resetCredit: list(capabilities.credential_actions).includes('reset_credit'),
-      statsRefresh: list(capabilities.credential_actions).includes('stats_refresh'),
+      stateRefresh: list(capabilities.credential_actions).includes('state_refresh'),
       parameterProtocols: sortProtocols(requestRoutes.map((route) => route.protocol)),
       nativeProtocols: sortProtocols(
         requestRoutes

@@ -66,9 +66,9 @@ export default {
       responses_websocket_enabled: 'Responses WebSocket',
       websocketHelp:
         'グループで上書きできます。無効化すると対象の WS 接続と生成を直ちに終了します。HTTP/SSE は影響を受けません。',
-      statsProxy: 'Statsプロキシ',
-      statsProxyHelp:
-        '認証情報のstats手動更新に使う上流プロキシ。未設定時はグローバル上流プロキシを使用します。',
+      stateProxy: 'Stateプロキシ',
+      stateProxyHelp:
+        '認証情報のstate手動更新に使う上流プロキシ。未設定時はグローバル上流プロキシを使用します。',
       first_byte_timeout: 'ネイティブ応答 / ストリーム初回イベントのタイムアウト',
       request_timeout: '上流リクエスト1回あたりのタイムアウト',
       stream_idle_timeout: 'ストリームアイドルタイムアウト',

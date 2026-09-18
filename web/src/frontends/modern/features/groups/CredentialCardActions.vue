@@ -25,8 +25,8 @@ const actions = computed(() => [
         { id: 'download', label: t('credentialCards.export'), icon: Download },
       ]
     : [{ id: 'test', label: t('credentialCards.test'), icon: Stethoscope }]),
-  ...(props.channel?.statsRefresh
-    ? [{ id: 'stats', label: t('credentialCards.statsRefresh'), icon: Activity }]
+  ...(props.channel?.stateRefresh
+    ? [{ id: 'state', label: t('credentialCards.stateRefresh'), icon: Activity }]
     : []),
   ...(props.row.state === 'cooldown' ||
   props.row.state === 'blacklisted' ||

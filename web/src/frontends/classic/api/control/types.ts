@@ -252,7 +252,7 @@ export interface CredentialObservationDto {
   last_error_code?: string
 }
 
-export interface CredentialStatsRefreshDto {
+export interface CredentialStateRefreshDto {
   turn_state: string
   attempts: number
   refreshed_at_ms: number

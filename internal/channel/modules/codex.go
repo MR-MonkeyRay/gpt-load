@@ -11,7 +11,7 @@ const (
 	CodexModelDiscovery     spec.UtilityID            = "codex_models"
 	CodexQuotaObservation   spec.UtilityID            = "codex_quota"
 	CodexResetCreditAction  spec.ActionID             = "codex_reset_credit"
-	CodexStatsProbe         spec.ActionID             = "codex_stats_probe"
+	CodexStateProbe         spec.ActionID             = "codex_state_probe"
 	CodexDefaultBaseURL                               = "https://chatgpt.com"
 )
 
@@ -62,7 +62,7 @@ func Codex() spec.Module {
 				ModelDiscovery:     CodexModelDiscovery,
 				QuotaObservation:   CodexQuotaObservation,
 				ResetCreditAction:  CodexResetCreditAction,
-				StatsProbe:         CodexStatsProbe,
+				StateProbe:         CodexStateProbe,
 			},
 		},
 	}

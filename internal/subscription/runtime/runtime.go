@@ -269,26 +269,26 @@ type ResetCreditResult struct {
 	RedeemedAtMS *int64
 }
 
-// StatsProbeRequest is the fixed request shape of one manual turn-state probe.
+// StateProbeRequest is the fixed request shape of one manual turn-state probe.
 // ProxyURL carries the "direct" sentinel or an explicit endpoint; an empty
 // value leaves the transport policy to the surrounding NetworkContext.
-type StatsProbeRequest struct {
+type StateProbeRequest struct {
 	Model                string
 	Input                string
 	ProxyURL             string
 	ProxyFromEnvironment bool
 }
 
-// StatsProbeResult carries the captured turn state. The value is a mutable
+// StateProbeResult carries the captured turn state. The value is a mutable
 // per-credential request header, never part of credential identity.
-type StatsProbeResult struct {
+type StateProbeResult struct {
 	TurnState string
 }
 
-// StatsProbe is the optional manual turn-state capture capability.
-type StatsProbe interface {
+// StateProbe is the optional manual turn-state capture capability.
+type StateProbe interface {
 	ID() spec.ActionID
-	ProbeTurnState(context.Context, Credential, Target, StatsProbeRequest) (StatsProbeResult, error)
+	ProbeTurnState(context.Context, Credential, Target, StateProbeRequest) (StateProbeResult, error)
 }
 
 // UpstreamHTTPError is a provider-neutral status classification. Bodies and
@@ -309,7 +309,7 @@ type channelRuntime struct {
 	discovery   ModelDiscovery
 	observation QuotaObservation
 	resetCredit ResetCreditAction
-	statsProbe  StatsProbe
+	stateProbe  StateProbe
 }
 
 // Runtime is the immutable, startup-compiled subscription capability registry.
@@ -324,7 +324,7 @@ type Implementations struct {
 	ModelDiscoveries   []ModelDiscovery
 	QuotaObservations  []QuotaObservation
 	ResetCreditActions []ResetCreditAction
-	StatsProbes        []StatsProbe
+	StateProbes        []StateProbe
 }
 
 // NewRuntime compiles explicitly supplied drivers and capabilities against the
@@ -336,7 +336,7 @@ func NewRuntime(channels *channel.Registry, registrations ...Implementations) (*
 		implementations.ModelDiscoveries = append(implementations.ModelDiscoveries, registration.ModelDiscoveries...)
 		implementations.QuotaObservations = append(implementations.QuotaObservations, registration.QuotaObservations...)
 		implementations.ResetCreditActions = append(implementations.ResetCreditActions, registration.ResetCreditActions...)
-		implementations.StatsProbes = append(implementations.StatsProbes, registration.StatsProbes...)
+		implementations.StateProbes = append(implementations.StateProbes, registration.StateProbes...)
 	}
 	return compileRuntime(
 		channels,
@@ -344,7 +344,7 @@ func NewRuntime(channels *channel.Registry, registrations ...Implementations) (*
 		implementations.ModelDiscoveries,
 		implementations.QuotaObservations,
 		implementations.ResetCreditActions,
-		implementations.StatsProbes,
+		implementations.StateProbes,
 	)
 }
 
@@ -354,7 +354,7 @@ func compileRuntime(
 	discoveries []ModelDiscovery,
 	observations []QuotaObservation,
 	resetCredits []ResetCreditAction,
-	statsProbes []StatsProbe,
+	stateProbes []StateProbe,
 ) (*Runtime, error) {
 	if channels == nil {
 		return nil, errors.New("compile subscription runtime: channel registry is unavailable")
@@ -395,14 +395,14 @@ func compileRuntime(
 	if err != nil {
 		return nil, fmt.Errorf("compile subscription actions: %w", err)
 	}
-	statsProbeByID, err := indexImplementations(statsProbes, func(value StatsProbe) spec.ExtensionID {
+	stateProbeByID, err := indexImplementations(stateProbes, func(value StateProbe) spec.ExtensionID {
 		if value == nil {
 			return ""
 		}
 		return spec.ExtensionID(value.ID())
 	})
 	if err != nil {
-		return nil, fmt.Errorf("compile subscription stats probes: %w", err)
+		return nil, fmt.Errorf("compile subscription state probes: %w", err)
 	}
 
 	result := &Runtime{byChannel: make(map[channel.ID]channelRuntime)}
@@ -415,7 +415,7 @@ func compileRuntime(
 		if descriptor.Connection.Type != string(spec.ConnectionSubscription) {
 			if bindings.SubscriptionDriver != "" || bindings.ModelDiscovery != "" ||
 				bindings.QuotaObservation != "" || bindings.ResetCreditAction != "" ||
-				bindings.StatsProbe != "" {
+				bindings.StateProbe != "" {
 				return nil, fmt.Errorf("compile subscription runtime: API key channel %q binds subscription capabilities", descriptor.ID)
 			}
 			continue
@@ -475,10 +475,10 @@ func compileRuntime(
 				return nil, fmt.Errorf("compile subscription runtime: channel %q references unknown action %q", descriptor.ID, bindings.ResetCreditAction)
 			}
 		}
-		if bindings.StatsProbe != "" {
-			compiled.statsProbe, ok = statsProbeByID[spec.ExtensionID(bindings.StatsProbe)]
+		if bindings.StateProbe != "" {
+			compiled.stateProbe, ok = stateProbeByID[spec.ExtensionID(bindings.StateProbe)]
 			if !ok {
-				return nil, fmt.Errorf("compile subscription runtime: channel %q references unknown stats probe %q", descriptor.ID, bindings.StatsProbe)
+				return nil, fmt.Errorf("compile subscription runtime: channel %q references unknown state probe %q", descriptor.ID, bindings.StateProbe)
 			}
 		}
 		result.byChannel[descriptor.ID] = compiled
@@ -618,12 +618,12 @@ func (runtime *Runtime) ResetCreditAction(channelID channel.ID) (ResetCreditActi
 	return value.resetCredit, ok && value.resetCredit != nil
 }
 
-func (runtime *Runtime) StatsProbe(channelID channel.ID) (StatsProbe, bool) {
+func (runtime *Runtime) StateProbe(channelID channel.ID) (StateProbe, bool) {
 	if runtime == nil {
 		return nil, false
 	}
 	value, ok := runtime.byChannel[channelID]
-	return value.statsProbe, ok && value.statsProbe != nil
+	return value.stateProbe, ok && value.stateProbe != nil
 }
 
 // ChannelIDs returns the stable set with a compiled subscription driver.

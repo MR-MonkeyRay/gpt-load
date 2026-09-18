@@ -54,7 +54,7 @@ type SettingsValuesResponse struct {
 	RequestLogRetentionDays   int                 `json:"request_log_retention_days"`
 	ModelsDevAutoSyncEnabled  bool                `json:"models_dev_auto_sync_enabled"`
 	ProxyConfig               outboundproxy.View  `json:"proxy_config"`
-	StatsProxyConfig          outboundproxy.View  `json:"stats_proxy_config"`
+	StateProxyConfig          outboundproxy.View  `json:"state_proxy_config"`
 }
 
 type SettingsResponse struct {
@@ -214,7 +214,7 @@ func normalizeSettingUpdates(
 
 	updates := make([]persistedSettingUpdate, 0, len(keys))
 	for _, key := range keys {
-		if key != outboundproxy.SystemSettingKey && key != outboundproxy.StatsSystemSettingKey &&
+		if key != outboundproxy.SystemSettingKey && key != outboundproxy.StateSystemSettingKey &&
 			!state.IsRuntimeSettingKey(key) {
 			return nil, app_errors.ErrValidation
 		}
@@ -223,7 +223,7 @@ func normalizeSettingUpdates(
 			updates = append(updates, persistedSettingUpdate{key: key})
 			continue
 		}
-		if key == outboundproxy.SystemSettingKey || key == outboundproxy.StatsSystemSettingKey {
+		if key == outboundproxy.SystemSettingKey || key == outboundproxy.StateSystemSettingKey {
 			config, err := outboundproxy.Decode(string(raw))
 			if err != nil || config.Mode == outboundproxy.ModeInherit || encryptionService == nil {
 				return nil, app_errors.ErrValidation
@@ -298,12 +298,12 @@ func mapSettingsResponse(
 	responseRemove := append([]string{}, settings.ResponseHeaderRules.Remove...)
 	overrides := make([]string, 0, len(rows))
 	var configuredProxy *outboundproxy.Config
-	var configuredStatsProxy *outboundproxy.Config
+	var configuredStateProxy *outboundproxy.Config
 	for _, row := range rows {
 		if state.IsRuntimeSettingKey(row.Key) {
 			overrides = append(overrides, row.Key)
 		}
-		if row.Key == outboundproxy.SystemSettingKey || row.Key == outboundproxy.StatsSystemSettingKey {
+		if row.Key == outboundproxy.SystemSettingKey || row.Key == outboundproxy.StateSystemSettingKey {
 			if encryptionService == nil {
 				return SettingsResponse{}, app_errors.ErrInternalServer
 			}
@@ -319,7 +319,7 @@ func mapSettingsResponse(
 			if row.Key == outboundproxy.SystemSettingKey {
 				configuredProxy = &config
 			} else {
-				configuredStatsProxy = &config
+				configuredStateProxy = &config
 			}
 		}
 	}
@@ -331,16 +331,16 @@ func mapSettingsResponse(
 	if err != nil {
 		return SettingsResponse{}, app_errors.ErrInternalServer
 	}
-	// Stats refreshes use their own override when configured and otherwise fall
+	// State refreshes use their own override when configured and otherwise fall
 	// back to the global effective policy.
-	effectiveStatsProxy := effectiveProxy
-	if configuredStatsProxy != nil {
-		effectiveStatsProxy, err = outboundproxy.Resolve(nil, nil, configuredStatsProxy, environmentProxy)
+	effectiveStateProxy := effectiveProxy
+	if configuredStateProxy != nil {
+		effectiveStateProxy, err = outboundproxy.Resolve(nil, nil, configuredStateProxy, environmentProxy)
 		if err != nil {
 			return SettingsResponse{}, app_errors.ErrInternalServer
 		}
 	}
-	statsProxyView, err := outboundproxy.NewView(configuredStatsProxy, effectiveStatsProxy)
+	stateProxyView, err := outboundproxy.NewView(configuredStateProxy, effectiveStateProxy)
 	if err != nil {
 		return SettingsResponse{}, app_errors.ErrInternalServer
 	}
@@ -384,7 +384,7 @@ func mapSettingsResponse(
 			RequestLogRetentionDays:   settings.RequestLogRetentionDays,
 			ModelsDevAutoSyncEnabled:  modelsDevAutoSyncEnabled,
 			ProxyConfig:               proxyView,
-			StatsProxyConfig:          statsProxyView,
+			StateProxyConfig:          stateProxyView,
 		},
 		Overrides: overrides,
 		ReadOnly:  readOnly,

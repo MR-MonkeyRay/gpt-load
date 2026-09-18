@@ -28,7 +28,7 @@ func Implementations() subscriptionruntime.Implementations {
 		ModelDiscoveries:   []subscriptionruntime.ModelDiscovery{driver.modelDiscovery()},
 		QuotaObservations:  []subscriptionruntime.QuotaObservation{driver.quotaObservation()},
 		ResetCreditActions: []subscriptionruntime.ResetCreditAction{driver.resetCreditAction()},
-		StatsProbes:        []subscriptionruntime.StatsProbe{driver.statsProbeCapability()},
+		StateProbes:        []subscriptionruntime.StateProbe{driver.stateProbeCapability()},
 	}
 }
 
@@ -243,21 +243,21 @@ func NormalizeResetCreditResult(raw []byte) (subscriptionruntime.ResetCreditResu
 
 // ProbeTurnState captures the Codex turn state for the resolved target through
 // the caller's frozen network policy.
-func (codexStatsProbe) ProbeTurnState(
+func (codexStateProbe) ProbeTurnState(
 	ctx context.Context,
 	credential subscriptionruntime.Credential,
 	target subscriptionruntime.Target,
-	request subscriptionruntime.StatsProbeRequest,
-) (subscriptionruntime.StatsProbeResult, error) {
+	request subscriptionruntime.StateProbeRequest,
+) (subscriptionruntime.StateProbeResult, error) {
 	value, err := ParseCredentialJSON(credential.Canonical())
 	if err != nil {
-		return subscriptionruntime.StatsProbeResult{}, err
+		return subscriptionruntime.StateProbeResult{}, err
 	}
 	baseURL, err := target.BaseURL()
 	if err != nil {
-		return subscriptionruntime.StatsProbeResult{}, err
+		return subscriptionruntime.StateProbeResult{}, err
 	}
-	turnState, err := ProbeTurnState(ctx, NewExecutor(), value, baseURL, StatsProbeRequest{
+	turnState, err := ProbeTurnState(ctx, NewExecutor(), value, baseURL, StateProbeRequest{
 		Model:                request.Model,
 		Input:                request.Input,
 		ProxyURL:             request.ProxyURL,
@@ -266,11 +266,11 @@ func (codexStatsProbe) ProbeTurnState(
 	if err != nil {
 		var upstream *UpstreamHTTPError
 		if errors.As(err, &upstream) {
-			return subscriptionruntime.StatsProbeResult{}, &subscriptionruntime.UpstreamHTTPError{StatusCode: upstream.StatusCode}
+			return subscriptionruntime.StateProbeResult{}, &subscriptionruntime.UpstreamHTTPError{StatusCode: upstream.StatusCode}
 		}
-		return subscriptionruntime.StatsProbeResult{}, err
+		return subscriptionruntime.StateProbeResult{}, err
 	}
-	return subscriptionruntime.StatsProbeResult{TurnState: turnState}, nil
+	return subscriptionruntime.StateProbeResult{TurnState: turnState}, nil
 }
 
 // Go cannot overload ID across the narrow capability interfaces, so wrappers
@@ -278,7 +278,7 @@ func (codexStatsProbe) ProbeTurnState(
 type codexModelDiscovery struct{ *codexDriver }
 type codexQuotaObservation struct{ *codexDriver }
 type codexResetCreditAction struct{ *codexDriver }
-type codexStatsProbe struct{ *codexDriver }
+type codexStateProbe struct{ *codexDriver }
 
 func (driver *codexDriver) modelDiscovery() subscriptionruntime.ModelDiscovery {
 	return codexModelDiscovery{driver}
@@ -289,14 +289,14 @@ func (driver *codexDriver) quotaObservation() subscriptionruntime.QuotaObservati
 func (driver *codexDriver) resetCreditAction() subscriptionruntime.ResetCreditAction {
 	return codexResetCreditAction{driver}
 }
-func (driver *codexDriver) statsProbeCapability() subscriptionruntime.StatsProbe {
-	return codexStatsProbe{driver}
+func (driver *codexDriver) stateProbeCapability() subscriptionruntime.StateProbe {
+	return codexStateProbe{driver}
 }
 
 func (codexModelDiscovery) ID() spec.UtilityID   { return modules.CodexModelDiscovery }
 func (codexQuotaObservation) ID() spec.UtilityID { return modules.CodexQuotaObservation }
 func (codexResetCreditAction) ID() spec.ActionID { return modules.CodexResetCreditAction }
-func (codexStatsProbe) ID() spec.ActionID        { return modules.CodexStatsProbe }
+func (codexStateProbe) ID() spec.ActionID        { return modules.CodexStateProbe }
 
 func codexRuntimeCredential(value Credential, canonical []byte) subscriptionruntime.Credential {
 	expiresAt, expires := CredentialExpiresAt(value)

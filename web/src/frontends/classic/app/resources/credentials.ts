@@ -26,7 +26,7 @@ import type {
   CredentialResetCreditConsumeDto,
   CredentialRecoveryDto,
   CredentialRevealDto,
-  CredentialStatsRefreshDto,
+  CredentialStateRefreshDto,
   CredentialStatus,
   CredentialSummaryDto,
   CredentialTestResultDto,
@@ -186,7 +186,7 @@ const observationSnapshotFields = [
   'reset_credits_available',
   'reset_credits',
 ] as const
-const statsRefreshFields = ['turn_state', 'attempts', 'refreshed_at_ms'] as const
+const stateRefreshFields = ['turn_state', 'attempts', 'refreshed_at_ms'] as const
 const planFields = ['name', 'level'] as const
 const observationAccountFields = [
   'display_name',
@@ -504,9 +504,9 @@ function projectObservation(value: unknown): CredentialObservationDto {
   }
 }
 
-function projectCredentialStatsRefresh(value: unknown): CredentialStatsRefreshDto {
+function projectCredentialStateRefresh(value: unknown): CredentialStateRefreshDto {
   const record = projectRecord(value)
-  assertNoSecretLikeFields(record, statsRefreshFields)
+  assertNoSecretLikeFields(record, stateRefreshFields)
   return {
     turn_state: projectString(record.turn_state, { allowEmpty: true }),
     attempts: projectSafeInteger(record.attempts, { minimum: 0 }),
@@ -985,14 +985,14 @@ export async function refreshCredentialObservation(
   )
 }
 
-export async function refreshCredentialStats(
+export async function refreshCredentialState(
   client: ApiClient,
   groupId: number,
   credentialId: number,
   signal?: AbortSignal,
-): Promise<CredentialStatsRefreshDto> {
-  return projectCredentialStatsRefresh(
-    await client.request(`/api/groups/${groupId}/credentials/${credentialId}/stats-refresh`, {
+): Promise<CredentialStateRefreshDto> {
+  return projectCredentialStateRefresh(
+    await client.request(`/api/groups/${groupId}/credentials/${credentialId}/state-refresh`, {
       method: 'POST',
       json: {},
       signal,

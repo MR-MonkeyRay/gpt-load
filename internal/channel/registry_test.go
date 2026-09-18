@@ -193,7 +193,7 @@ func TestCodexIsTheOnlySubscriptionChannelWithoutExposingExecutor(t *testing.T) 
 	}
 	if !descriptor.Capabilities.ModelDiscovery || !descriptor.Capabilities.QuotaObservation ||
 		!reflect.DeepEqual(descriptor.Capabilities.CredentialActions, []CredentialAction{
-			CredentialActionResetCredit, CredentialActionStatsRefresh,
+			CredentialActionResetCredit, CredentialActionStateRefresh,
 		}) {
 		t.Fatalf("subscription capabilities = %#v", descriptor.Capabilities)
 	}

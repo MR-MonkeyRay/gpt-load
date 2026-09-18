@@ -528,7 +528,7 @@ func decodeSettingValue(raw string) (any, error) {
 func isIgnoredSystemSetting(key string) bool {
 	return strings.HasPrefix(key, models.InternalSystemSettingPrefix) ||
 		key == outboundproxy.SystemSettingKey ||
-		key == outboundproxy.StatsSystemSettingKey ||
+		key == outboundproxy.StateSystemSettingKey ||
 		key == "contact_info" // 兼容本分支旧版本保存的已移除设置。
 }
 

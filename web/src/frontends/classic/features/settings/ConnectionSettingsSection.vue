@@ -31,16 +31,16 @@ const props = defineProps<{
   proxy: ProxyViewDto
   proxyMode: ProxyConfiguredMode
   proxyEndpoint: string
-  statsProxy: ProxyViewDto
-  statsProxyMode: ProxyConfiguredMode
-  statsProxyEndpoint: string
+  stateProxy: ProxyViewDto
+  stateProxyMode: ProxyConfiguredMode
+  stateProxyEndpoint: string
 }>()
 const emit = defineEmits<{
   change: [change: SettingsDraftChange]
   'update:proxyMode': [value: ProxyConfiguredMode]
   'update:proxyEndpoint': [value: string]
-  'update:statsProxyMode': [value: ProxyConfiguredMode]
-  'update:statsProxyEndpoint': [value: string]
+  'update:stateProxyMode': [value: ProxyConfiguredMode]
+  'update:stateProxyEndpoint': [value: string]
 }>()
 const { locale, t } = useI18n()
 const timeoutKeys: TimeoutSettingKey[] = [
@@ -61,7 +61,7 @@ function setWebsocketEnabled(value: boolean): void {
 }
 
 // 代理沿用其它设置项的覆盖语义：inherit 即“未覆盖”，direct/custom 即“显式覆盖”。
-// 「出站代理」与「Stats代理」共用同一套行状态推导，只是基线视图不同。
+// 「出站代理」与「State代理」共用同一套行状态推导，只是基线视图不同。
 function proxyRowState(view: ProxyViewDto, mode: ProxyConfiguredMode) {
   const overridden = mode !== 'inherit'
   const pendingRestore = view.configured_mode !== 'inherit' && mode === 'inherit'
@@ -83,19 +83,19 @@ function proxyRowState(view: ProxyViewDto, mode: ProxyConfiguredMode) {
 }
 
 const proxyRow = computed(() => proxyRowState(props.proxy, props.proxyMode))
-const statsProxyRow = computed(() => proxyRowState(props.statsProxy, props.statsProxyMode))
+const stateProxyRow = computed(() => proxyRowState(props.stateProxy, props.stateProxyMode))
 
 function toggleProxyOverride(): void {
   emit('update:proxyMode', proxyOverrideToggleMode(props.proxy, proxyRow.value.overridden))
   emit('update:proxyEndpoint', '')
 }
 
-function toggleStatsProxyOverride(): void {
+function toggleStateProxyOverride(): void {
   emit(
-    'update:statsProxyMode',
-    proxyOverrideToggleMode(props.statsProxy, statsProxyRow.value.overridden),
+    'update:stateProxyMode',
+    proxyOverrideToggleMode(props.stateProxy, stateProxyRow.value.overridden),
   )
-  emit('update:statsProxyEndpoint', '')
+  emit('update:stateProxyEndpoint', '')
 }
 
 function cloneDraft(): SettingsDraft {
@@ -207,24 +207,24 @@ function timeoutError(key: TimeoutSettingKey): string | undefined {
         </template>
       </SettingRow>
       <SettingRow
-        :label="t('settings.runtime.statsProxy')"
-        :value="statsProxyRow.value"
-        :help="t('settings.runtime.statsProxyHelp')"
-        :source-label="statsProxyRow.sourceLabel"
-        :action-label="statsProxyRow.actionLabel"
-        :overridden="statsProxyRow.overridden"
-        :pending-restore="statsProxyRow.pendingRestore"
+        :label="t('settings.runtime.stateProxy')"
+        :value="stateProxyRow.value"
+        :help="t('settings.runtime.stateProxyHelp')"
+        :source-label="stateProxyRow.sourceLabel"
+        :action-label="stateProxyRow.actionLabel"
+        :overridden="stateProxyRow.overridden"
+        :pending-restore="stateProxyRow.pendingRestore"
         :disabled="disabled"
-        @toggle="toggleStatsProxyOverride"
+        @toggle="toggleStateProxyOverride"
       >
         <template #control>
           <ProxyOverrideControl
-            :base="statsProxy"
-            :mode="statsProxyMode"
-            :endpoint="statsProxyEndpoint"
+            :base="stateProxy"
+            :mode="stateProxyMode"
+            :endpoint="stateProxyEndpoint"
             :disabled="disabled"
-            @update:mode="emit('update:statsProxyMode', $event)"
-            @update:endpoint="emit('update:statsProxyEndpoint', $event)"
+            @update:mode="emit('update:stateProxyMode', $event)"
+            @update:endpoint="emit('update:stateProxyEndpoint', $event)"
           />
         </template>
       </SettingRow>

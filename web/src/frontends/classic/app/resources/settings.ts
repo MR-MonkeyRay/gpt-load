@@ -87,7 +87,7 @@ export interface SettingsValues {
   request_log_retention_days: number
   models_dev_auto_sync_enabled: boolean
   proxy_config: ProxyViewDto
-  stats_proxy_config: ProxyViewDto
+  state_proxy_config: ProxyViewDto
 }
 
 export interface SettingsDto {
@@ -114,7 +114,7 @@ export type SettingsPatch = Partial<{
   request_log_retention_days: number | null
   models_dev_auto_sync_enabled: boolean | null
   proxy_config: ProxyMutation
-  stats_proxy_config: ProxyMutation
+  state_proxy_config: ProxyMutation
 }>
 
 export interface SettingsResource {
@@ -122,7 +122,7 @@ export interface SettingsResource {
 }
 
 const settingsFields = ['values', 'overrides', 'read_only'] as const
-const settingsValueFields = [...runtimeSettingKeys, 'proxy_config', 'stats_proxy_config'] as const
+const settingsValueFields = [...runtimeSettingKeys, 'proxy_config', 'state_proxy_config'] as const
 
 function invalidResponse(): never {
   throw new InvalidResponseError()
@@ -221,7 +221,7 @@ export function projectSettings(value: unknown): SettingsDto {
       }),
       models_dev_auto_sync_enabled: projectBoolean(values.models_dev_auto_sync_enabled),
       proxy_config: projectProxyView(values.proxy_config),
-      stats_proxy_config: projectProxyView(values.stats_proxy_config),
+      state_proxy_config: projectProxyView(values.state_proxy_config),
     },
     overrides,
     read_only: readOnly,

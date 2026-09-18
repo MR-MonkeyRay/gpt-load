@@ -77,17 +77,17 @@ const {
 const proxyMode = ref<ProxyConfiguredMode>('inherit')
 const proxyEndpoint = ref('')
 const proxyBaseView = ref<ProxyViewDto>()
-const statsProxyMode = ref<ProxyConfiguredMode>('inherit')
-const statsProxyEndpoint = ref('')
-const statsProxyBaseView = ref<ProxyViewDto>()
+const stateProxyMode = ref<ProxyConfiguredMode>('inherit')
+const stateProxyEndpoint = ref('')
+const stateProxyBaseView = ref<ProxyViewDto>()
 const proxyState = computed(() =>
   proxyBaseView.value
     ? proxyDraftState(proxyBaseView.value, proxyMode.value, proxyEndpoint.value)
     : { dirty: false, invalid: false, value: undefined },
 )
-const statsProxyState = computed(() =>
-  statsProxyBaseView.value
-    ? proxyDraftState(statsProxyBaseView.value, statsProxyMode.value, statsProxyEndpoint.value)
+const stateProxyState = computed(() =>
+  stateProxyBaseView.value
+    ? proxyDraftState(stateProxyBaseView.value, stateProxyMode.value, stateProxyEndpoint.value)
     : { dirty: false, invalid: false, value: undefined },
 )
 const hasLocalEdits = computed(
@@ -95,7 +95,7 @@ const hasLocalEdits = computed(
     headerRulesInvalidEdits.value ||
     responseRulesInvalidEdits.value ||
     proxyState.value.dirty ||
-    statsProxyState.value.dirty,
+    stateProxyState.value.dirty,
 )
 const {
   base,
@@ -117,9 +117,9 @@ function resetProxyDraft(view: ProxyViewDto): void {
   proxyEndpoint.value = ''
 }
 
-function resetStatsProxyDraft(view: ProxyViewDto): void {
-  statsProxyMode.value = view.configured_mode
-  statsProxyEndpoint.value = ''
+function resetStateProxyDraft(view: ProxyViewDto): void {
+  stateProxyMode.value = view.configured_mode
+  stateProxyEndpoint.value = ''
 }
 
 watch(
@@ -133,11 +133,11 @@ watch(
 )
 
 watch(
-  () => base.value?.settings.values.stats_proxy_config,
+  () => base.value?.settings.values.state_proxy_config,
   (view) => {
     if (!view) return
-    resetStatsProxyDraft(view)
-    statsProxyBaseView.value = view
+    resetStateProxyDraft(view)
+    stateProxyBaseView.value = view
   },
   { immediate: true },
 )
@@ -168,14 +168,14 @@ const dirty = computed(
     headerRulesInvalidEdits.value ||
     responseRulesInvalidEdits.value ||
     proxyState.value.dirty ||
-    statsProxyState.value.dirty,
+    stateProxyState.value.dirty,
 )
 const valid = computed(
   () =>
     controllerValid.value &&
     browserAccessValid.value &&
     !proxyState.value.invalid &&
-    !statsProxyState.value.invalid,
+    !stateProxyState.value.invalid,
 )
 const timeoutKeys = [
   'first_byte_timeout',
@@ -197,7 +197,7 @@ const changedKeys = computed(() => {
 const changedLabels = computed(() => [
   ...changedKeys.value.map(settingLabel),
   ...(proxyState.value.dirty ? [t('common.proxy.title')] : []),
-  ...(statsProxyState.value.dirty ? [t('settings.runtime.statsProxy')] : []),
+  ...(stateProxyState.value.dirty ? [t('settings.runtime.stateProxy')] : []),
 ])
 const invalidKeys = computed<RuntimeSettingKey[]>(() => {
   const current = draft.value
@@ -312,7 +312,7 @@ function discard(): void {
   responseRulesInvalidEdits.value = false
   browserAccessEditorRevision.value += 1
   if (proxyBaseView.value) resetProxyDraft(proxyBaseView.value)
-  if (statsProxyBaseView.value) resetStatsProxyDraft(statsProxyBaseView.value)
+  if (stateProxyBaseView.value) resetStateProxyDraft(stateProxyBaseView.value)
 }
 
 function requestDiscard(): void {
@@ -383,8 +383,8 @@ async function handleSaveAll(): Promise<void> {
   if (proxyState.value.dirty && proxyState.value.value !== undefined) {
     extra.proxy_config = proxyState.value.value
   }
-  if (statsProxyState.value.dirty && statsProxyState.value.value !== undefined) {
-    extra.stats_proxy_config = statsProxyState.value.value
+  if (stateProxyState.value.dirty && stateProxyState.value.value !== undefined) {
+    extra.state_proxy_config = stateProxyState.value.value
   }
   await saveAll(extra)
 }
@@ -462,14 +462,14 @@ onBeforeUnmount(() => {
               :proxy="base.settings.values.proxy_config"
               :proxy-mode="proxyMode"
               :proxy-endpoint="proxyEndpoint"
-              :stats-proxy="base.settings.values.stats_proxy_config"
-              :stats-proxy-mode="statsProxyMode"
-              :stats-proxy-endpoint="statsProxyEndpoint"
+              :state-proxy="base.settings.values.state_proxy_config"
+              :state-proxy-mode="stateProxyMode"
+              :state-proxy-endpoint="stateProxyEndpoint"
               @change="updateDraft"
               @update:proxy-mode="proxyMode = $event"
               @update:proxy-endpoint="proxyEndpoint = $event"
-              @update:stats-proxy-mode="statsProxyMode = $event"
-              @update:stats-proxy-endpoint="statsProxyEndpoint = $event"
+              @update:state-proxy-mode="stateProxyMode = $event"
+              @update:state-proxy-endpoint="stateProxyEndpoint = $event"
             />
             <ReliabilitySettingsSection
               :base="base"

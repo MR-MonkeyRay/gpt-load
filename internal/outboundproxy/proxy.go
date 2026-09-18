@@ -16,10 +16,10 @@ var ErrInvalidConfig = errors.New("invalid outbound proxy config")
 
 const SystemSettingKey = "proxy_config"
 
-// StatsSystemSettingKey stores the dedicated outbound proxy used by manual
-// credential stats refreshes. When unset or inherit it falls back to the global
+// StateSystemSettingKey stores the dedicated outbound proxy used by manual
+// credential state refreshes. When unset or inherit it falls back to the global
 // effective proxy policy.
-const StatsSystemSettingKey = "stats_proxy_config"
+const StateSystemSettingKey = "state_proxy_config"
 
 type Mode string
 

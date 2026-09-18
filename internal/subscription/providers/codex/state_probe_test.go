@@ -9,22 +9,22 @@ import (
 	"testing"
 )
 
-type statsProbeExecutor struct {
+type stateProbeExecutor struct {
 	request  ExecuteRequest
 	streamed context.Context
 	response *ExecuteStreamResponse
 	err      error
 }
 
-func (e *statsProbeExecutor) Execute(context.Context, string, Credential, ExecuteRequest) (ExecuteResponse, error) {
+func (e *stateProbeExecutor) Execute(context.Context, string, Credential, ExecuteRequest) (ExecuteResponse, error) {
 	return ExecuteResponse{}, errors.New("unexpected Execute call")
 }
 
-func (e *statsProbeExecutor) CountTokens(context.Context, string, Credential, ExecuteRequest) (ExecuteResponse, error) {
+func (e *stateProbeExecutor) CountTokens(context.Context, string, Credential, ExecuteRequest) (ExecuteResponse, error) {
 	return ExecuteResponse{}, errors.New("unexpected CountTokens call")
 }
 
-func (e *statsProbeExecutor) ExecuteStream(
+func (e *stateProbeExecutor) ExecuteStream(
 	ctx context.Context,
 	_ string,
 	_ Credential,
@@ -38,10 +38,10 @@ func (e *statsProbeExecutor) ExecuteStream(
 func TestProbeTurnStateSendsFixedRequestAndDisconnectsAfterHeaders(t *testing.T) {
 	t.Parallel()
 
-	executor := &statsProbeExecutor{response: &ExecuteStreamResponse{
+	executor := &stateProbeExecutor{response: &ExecuteStreamResponse{
 		Headers: http.Header{"X-Codex-Turn-State": {"  turn-state-value  "}},
 	}}
-	value, err := ProbeTurnState(t.Context(), executor, Credential{}, "https://upstream.example", StatsProbeRequest{
+	value, err := ProbeTurnState(t.Context(), executor, Credential{}, "https://upstream.example", StateProbeRequest{
 		Model: "gpt-6-astra", Input: "ping", ProxyURL: "direct",
 	})
 	if err != nil {
@@ -74,22 +74,22 @@ func TestProbeTurnStateSendsFixedRequestAndDisconnectsAfterHeaders(t *testing.T)
 func TestProbeTurnStateReportsMissingHeaderAndUpstreamFailure(t *testing.T) {
 	t.Parallel()
 
-	value, err := ProbeTurnState(t.Context(), &statsProbeExecutor{
+	value, err := ProbeTurnState(t.Context(), &stateProbeExecutor{
 		response: &ExecuteStreamResponse{Headers: http.Header{}},
-	}, Credential{}, "https://upstream.example", StatsProbeRequest{Model: "gpt-6-astra", Input: "ping"})
+	}, Credential{}, "https://upstream.example", StateProbeRequest{Model: "gpt-6-astra", Input: "ping"})
 	if err != nil || value != "" {
 		t.Fatalf("missing header = %q / %v", value, err)
 	}
 
-	_, err = ProbeTurnState(t.Context(), &statsProbeExecutor{
+	_, err = ProbeTurnState(t.Context(), &stateProbeExecutor{
 		err: &UpstreamHTTPError{Operation: "responses", StatusCode: http.StatusUnauthorized},
-	}, Credential{}, "https://upstream.example", StatsProbeRequest{Model: "gpt-6-astra", Input: "ping"})
+	}, Credential{}, "https://upstream.example", StateProbeRequest{Model: "gpt-6-astra", Input: "ping"})
 	var upstream *UpstreamHTTPError
 	if !errors.As(err, &upstream) || upstream.StatusCode != http.StatusUnauthorized {
 		t.Fatalf("probe error = %#v / %v", upstream, err)
 	}
 
-	if _, err := ProbeTurnState(t.Context(), nil, Credential{}, "https://upstream.example", StatsProbeRequest{}); err == nil {
+	if _, err := ProbeTurnState(t.Context(), nil, Credential{}, "https://upstream.example", StateProbeRequest{}); err == nil {
 		t.Fatal("ProbeTurnState() accepted a nil executor")
 	}
 }

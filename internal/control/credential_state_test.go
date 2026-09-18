@@ -23,7 +23,7 @@ import (
 	subscriptionruntime "gpt-load/internal/subscription/runtime"
 )
 
-func TestRefreshCredentialStatsRetriesUntilCompleteTurnState(t *testing.T) {
+func TestRefreshCredentialStateRetriesUntilCompleteTurnState(t *testing.T) {
 	t.Parallel()
 
 	fixture, groupID, credentialID := newSubscriptionCredentialFixture(t)
@@ -31,34 +31,34 @@ func TestRefreshCredentialStatsRetriesUntilCompleteTurnState(t *testing.T) {
 	fixture.service.now = func() time.Time { return now }
 	complete := strings.Repeat("s", execution.CodexTurnStateLength)
 	calls := 0
-	var probed subscriptionruntime.StatsProbeRequest
+	var probed subscriptionruntime.StateProbeRequest
 	fixture.service.probeSubscriptionTurnState = func(
 		_ context.Context,
 		channelID channel.ID,
 		_ subscriptionruntime.Credential,
 		_ subscriptionruntime.Target,
-		request subscriptionruntime.StatsProbeRequest,
-	) (subscriptionruntime.StatsProbeResult, error) {
+		request subscriptionruntime.StateProbeRequest,
+	) (subscriptionruntime.StateProbeResult, error) {
 		if channelID != channel.Codex {
 			t.Fatalf("probe channel = %q", channelID)
 		}
 		calls++
 		probed = request
 		if calls < 3 {
-			return subscriptionruntime.StatsProbeResult{TurnState: "incomplete"}, nil
+			return subscriptionruntime.StateProbeResult{TurnState: "incomplete"}, nil
 		}
-		return subscriptionruntime.StatsProbeResult{TurnState: complete}, nil
+		return subscriptionruntime.StateProbeResult{TurnState: complete}, nil
 	}
 
-	response, err := fixture.service.RefreshCredentialStats(t.Context(), groupID, credentialID)
+	response, err := fixture.service.RefreshCredentialState(t.Context(), groupID, credentialID)
 	if err != nil {
-		t.Fatalf("RefreshCredentialStats() error = %v", err)
+		t.Fatalf("RefreshCredentialState() error = %v", err)
 	}
-	if probe, ok := fixture.service.subscriptions.StatsProbe(channel.Codex); !ok || probe.ID() != modules.CodexStatsProbe {
-		t.Fatalf("codex stats probe = %#v, found = %t", probe, ok)
+	if probe, ok := fixture.service.subscriptions.StateProbe(channel.Codex); !ok || probe.ID() != modules.CodexStateProbe {
+		t.Fatalf("codex state probe = %#v, found = %t", probe, ok)
 	}
-	if probe, ok := fixture.service.subscriptions.StatsProbe(channel.OpenAI); ok || probe != nil {
-		t.Fatalf("api-key channel exposed a stats probe: %#v", probe)
+	if probe, ok := fixture.service.subscriptions.StateProbe(channel.OpenAI); ok || probe != nil {
+		t.Fatalf("api-key channel exposed a state probe: %#v", probe)
 	}
 	if response.TurnState != complete || response.Attempts != 3 || response.RefreshedAtMS != now.UnixMilli() {
 		t.Fatalf("response = %#v", response)
@@ -66,7 +66,7 @@ func TestRefreshCredentialStatsRetriesUntilCompleteTurnState(t *testing.T) {
 	if probed.Model != execution.CodexTurnStateModel || probed.Input != "ping" {
 		t.Fatalf("probe request = %#v", probed)
 	}
-	// No stats override and no global proxy is configured, so the probe runs direct.
+	// No state override and no global proxy is configured, so the probe runs direct.
 	if probed.ProxyURL != "direct" || probed.ProxyFromEnvironment {
 		t.Fatalf("probe proxy = %#v", probed)
 	}
@@ -84,7 +84,7 @@ func TestRefreshCredentialStatsRetriesUntilCompleteTurnState(t *testing.T) {
 	}
 }
 
-func TestRefreshCredentialStatsStopsAfterBoundedAttempts(t *testing.T) {
+func TestRefreshCredentialStateStopsAfterBoundedAttempts(t *testing.T) {
 	t.Parallel()
 
 	fixture, groupID, credentialID := newSubscriptionCredentialFixture(t)
@@ -94,16 +94,16 @@ func TestRefreshCredentialStatsStopsAfterBoundedAttempts(t *testing.T) {
 		channel.ID,
 		subscriptionruntime.Credential,
 		subscriptionruntime.Target,
-		subscriptionruntime.StatsProbeRequest,
-	) (subscriptionruntime.StatsProbeResult, error) {
+		subscriptionruntime.StateProbeRequest,
+	) (subscriptionruntime.StateProbeResult, error) {
 		calls++
-		return subscriptionruntime.StatsProbeResult{TurnState: "incomplete"}, nil
+		return subscriptionruntime.StateProbeResult{TurnState: "incomplete"}, nil
 	}
-	if _, err := fixture.service.RefreshCredentialStats(t.Context(), groupID, credentialID); err == nil {
-		t.Fatal("RefreshCredentialStats() accepted an incomplete turn state")
+	if _, err := fixture.service.RefreshCredentialState(t.Context(), groupID, credentialID); err == nil {
+		t.Fatal("RefreshCredentialState() accepted an incomplete turn state")
 	}
-	if calls != statsRefreshMaxAttempts {
-		t.Fatalf("probe attempts = %d, want %d", calls, statsRefreshMaxAttempts)
+	if calls != stateRefreshMaxAttempts {
+		t.Fatalf("probe attempts = %d, want %d", calls, stateRefreshMaxAttempts)
 	}
 	var row models.Credential
 	if err := fixture.db.Take(&row, credentialID).Error; err != nil {
@@ -118,17 +118,17 @@ func TestRefreshCredentialStatsStopsAfterBoundedAttempts(t *testing.T) {
 		channel.ID,
 		subscriptionruntime.Credential,
 		subscriptionruntime.Target,
-		subscriptionruntime.StatsProbeRequest,
-	) (subscriptionruntime.StatsProbeResult, error) {
-		return subscriptionruntime.StatsProbeResult{}, &subscriptionruntime.UpstreamHTTPError{StatusCode: 401}
+		subscriptionruntime.StateProbeRequest,
+	) (subscriptionruntime.StateProbeResult, error) {
+		return subscriptionruntime.StateProbeResult{}, &subscriptionruntime.UpstreamHTTPError{StatusCode: 401}
 	}
-	_, err := fixture.service.RefreshCredentialStats(t.Context(), groupID, credentialID)
+	_, err := fixture.service.RefreshCredentialState(t.Context(), groupID, credentialID)
 	if !errors.Is(err, app_errors.ErrCredentialReauthorizationRequired) {
 		t.Fatalf("unauthorized probe error = %v", err)
 	}
 }
 
-func TestCredentialStatsRefreshRoutePublishesTurnStateAndRejectsAPIKeyGroups(t *testing.T) {
+func TestCredentialStateRefreshRoutePublishesTurnStateAndRejectsAPIKeyGroups(t *testing.T) {
 	t.Parallel()
 
 	initControlI18n(t)
@@ -139,35 +139,35 @@ func TestCredentialStatsRefreshRoutePublishesTurnStateAndRejectsAPIKeyGroups(t *
 		channel.ID,
 		subscriptionruntime.Credential,
 		subscriptionruntime.Target,
-		subscriptionruntime.StatsProbeRequest,
-	) (subscriptionruntime.StatsProbeResult, error) {
-		return subscriptionruntime.StatsProbeResult{TurnState: complete}, nil
+		subscriptionruntime.StateProbeRequest,
+	) (subscriptionruntime.StateProbeResult, error) {
+		return subscriptionruntime.StateProbeResult{TurnState: complete}, nil
 	}
 	engine := gin.New()
 	NewServer(&config.Config{AuthKey: "test-auth-key"}, fixture.service).RegisterRoutes(engine)
 
 	request := httptest.NewRequest(http.MethodPost,
-		fmt.Sprintf("/api/groups/%d/credentials/%d/stats-refresh", groupID, credentialID),
+		fmt.Sprintf("/api/groups/%d/credentials/%d/state-refresh", groupID, credentialID),
 		strings.NewReader(`{}`))
 	request.Header.Set("Authorization", "Bearer test-auth-key")
 	request.Header.Set("Content-Type", "application/json")
 	response := httptest.NewRecorder()
 	engine.ServeHTTP(response, request)
 	if response.Code != http.StatusOK {
-		t.Fatalf("stats refresh = %d %s", response.Code, response.Body)
+		t.Fatalf("state refresh = %d %s", response.Code, response.Body)
 	}
 	var envelope struct {
-		Data CredentialStatsRefreshResponse `json:"data"`
+		Data CredentialStateRefreshResponse `json:"data"`
 	}
 	if err := json.Unmarshal(response.Body.Bytes(), &envelope); err != nil {
 		t.Fatal(err)
 	}
 	if envelope.Data.TurnState != complete || envelope.Data.Attempts != 1 {
-		t.Fatalf("stats refresh payload = %#v", envelope.Data)
+		t.Fatalf("state refresh payload = %#v", envelope.Data)
 	}
 
 	group := models.Group{
-		Name: "api-key-stats", ChannelID: string(channel.OpenAI),
+		Name: "api-key-state", ChannelID: string(channel.OpenAI),
 		ConnectionType: models.ConnectionTypeAPIKey, Params: models.JSON(`{}`),
 		Models: models.JSON(`[]`), Enabled: true,
 	}
@@ -179,32 +179,32 @@ func TestCredentialStatsRefreshRoutePublishesTurnStateAndRejectsAPIKeyGroups(t *
 		t.Fatal(err)
 	}
 	denied := httptest.NewRequest(http.MethodPost,
-		fmt.Sprintf("/api/groups/%d/credentials/%d/stats-refresh", group.ID, other.ID),
+		fmt.Sprintf("/api/groups/%d/credentials/%d/state-refresh", group.ID, other.ID),
 		strings.NewReader(`{}`))
 	denied.Header.Set("Authorization", "Bearer test-auth-key")
 	denied.Header.Set("Content-Type", "application/json")
 	deniedResponse := httptest.NewRecorder()
 	engine.ServeHTTP(deniedResponse, denied)
 	if deniedResponse.Code != http.StatusBadRequest {
-		t.Fatalf("api-key stats refresh = %d %s", deniedResponse.Code, deniedResponse.Body)
+		t.Fatalf("api-key state refresh = %d %s", deniedResponse.Code, deniedResponse.Body)
 	}
 }
 
-func TestRefreshCredentialStatsUsesStatsProxyPrecedence(t *testing.T) {
+func TestRefreshCredentialStateUsesStateProxyPrecedence(t *testing.T) {
 	t.Parallel()
 
 	fixture, groupID, credentialID := newSubscriptionCredentialFixture(t)
 	complete := strings.Repeat("s", execution.CodexTurnStateLength)
-	probed := make(chan subscriptionruntime.StatsProbeRequest, 1)
+	probed := make(chan subscriptionruntime.StateProbeRequest, 1)
 	fixture.service.probeSubscriptionTurnState = func(
 		_ context.Context,
 		_ channel.ID,
 		_ subscriptionruntime.Credential,
 		_ subscriptionruntime.Target,
-		request subscriptionruntime.StatsProbeRequest,
-	) (subscriptionruntime.StatsProbeResult, error) {
+		request subscriptionruntime.StateProbeRequest,
+	) (subscriptionruntime.StateProbeResult, error) {
 		probed <- request
-		return subscriptionruntime.StatsProbeResult{TurnState: complete}, nil
+		return subscriptionruntime.StateProbeResult{TurnState: complete}, nil
 	}
 	update := func(key, value string) {
 		t.Helper()
@@ -214,10 +214,10 @@ func TestRefreshCredentialStatsUsesStatsProxyPrecedence(t *testing.T) {
 			t.Fatalf("UpdateSettings(%s) error = %v", key, err)
 		}
 	}
-	nextProbe := func() subscriptionruntime.StatsProbeRequest {
+	nextProbe := func() subscriptionruntime.StateProbeRequest {
 		t.Helper()
-		if _, err := fixture.service.RefreshCredentialStats(t.Context(), groupID, credentialID); err != nil {
-			t.Fatalf("RefreshCredentialStats() error = %v", err)
+		if _, err := fixture.service.RefreshCredentialState(t.Context(), groupID, credentialID); err != nil {
+			t.Fatalf("RefreshCredentialState() error = %v", err)
 		}
 		return <-probed
 	}
@@ -227,13 +227,13 @@ func TestRefreshCredentialStatsUsesStatsProxyPrecedence(t *testing.T) {
 		t.Fatalf("global proxy probe = %#v", got)
 	}
 
-	update(outboundproxy.StatsSystemSettingKey, `{"mode":"custom","url":"http://stats.example.com:8080"}`)
-	if got := nextProbe(); got.ProxyURL != "http://stats.example.com:8080" {
-		t.Fatalf("stats override probe = %#v", got)
+	update(outboundproxy.StateSystemSettingKey, `{"mode":"custom","url":"http://state.example.com:8080"}`)
+	if got := nextProbe(); got.ProxyURL != "http://state.example.com:8080" {
+		t.Fatalf("state override probe = %#v", got)
 	}
 
-	update(outboundproxy.StatsSystemSettingKey, "null")
+	update(outboundproxy.StateSystemSettingKey, "null")
 	if got := nextProbe(); got.ProxyURL != "http://global.example.com:8080" {
-		t.Fatalf("stats reset probe = %#v", got)
+		t.Fatalf("state reset probe = %#v", got)
 	}
 }

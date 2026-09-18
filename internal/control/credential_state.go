@@ -17,120 +17,120 @@ import (
 	subscriptionruntime "gpt-load/internal/subscription/runtime"
 )
 
-// Manual stats refresh contract: one fixed probe request, repeated until the
+// Manual state refresh contract: one fixed probe request, repeated until the
 // upstream returns a complete turn state.
 const (
-	statsRefreshInput       = "ping"
-	statsRefreshMaxAttempts = 5
-	statsRefreshTimeout     = 60 * time.Second
+	stateRefreshInput       = "ping"
+	stateRefreshMaxAttempts = 5
+	stateRefreshTimeout     = 60 * time.Second
 )
 
-// CredentialStatsRefreshResponse is the captured turn state of one credential.
-type CredentialStatsRefreshResponse struct {
+// CredentialStateRefreshResponse is the captured turn state of one credential.
+type CredentialStateRefreshResponse struct {
 	TurnState     string `json:"turn_state"`
 	Attempts      int    `json:"attempts"`
 	RefreshedAtMS int64  `json:"refreshed_at_ms"`
 }
 
-type statsRefreshFlight struct {
+type stateRefreshFlight struct {
 	done   chan struct{}
-	result CredentialStatsRefreshResponse
+	result CredentialStateRefreshResponse
 	err    error
 }
 
-// RefreshCredentialStats probes one credential for the codex turn state and
+// RefreshCredentialState probes one credential for the codex turn state and
 // persists the value as a fixed per-credential request header. Concurrent
 // refreshes of the same credential join the in-flight probe.
-func (s *Service) RefreshCredentialStats(
+func (s *Service) RefreshCredentialState(
 	ctx context.Context,
 	groupID uint,
 	credentialID uint,
-) (CredentialStatsRefreshResponse, error) {
+) (CredentialStateRefreshResponse, error) {
 	if groupID == 0 || credentialID == 0 {
-		return CredentialStatsRefreshResponse{}, app_errors.ErrValidation
+		return CredentialStateRefreshResponse{}, app_errors.ErrValidation
 	}
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	s.statsMu.Lock()
-	if existing := s.statsFlights[credentialID]; existing != nil {
-		s.statsMu.Unlock()
+	s.stateMu.Lock()
+	if existing := s.stateFlights[credentialID]; existing != nil {
+		s.stateMu.Unlock()
 		select {
 		case <-ctx.Done():
-			return CredentialStatsRefreshResponse{}, ctx.Err()
+			return CredentialStateRefreshResponse{}, ctx.Err()
 		case <-existing.done:
 			return existing.result, existing.err
 		}
 	}
-	if s.statsFlights == nil {
-		s.statsFlights = make(map[uint]*statsRefreshFlight)
+	if s.stateFlights == nil {
+		s.stateFlights = make(map[uint]*stateRefreshFlight)
 	}
-	flight := &statsRefreshFlight{done: make(chan struct{})}
-	s.statsFlights[credentialID] = flight
-	s.statsMu.Unlock()
+	flight := &stateRefreshFlight{done: make(chan struct{})}
+	s.stateFlights[credentialID] = flight
+	s.stateMu.Unlock()
 	defer func() {
-		s.statsMu.Lock()
-		if s.statsFlights[credentialID] == flight {
-			delete(s.statsFlights, credentialID)
+		s.stateMu.Lock()
+		if s.stateFlights[credentialID] == flight {
+			delete(s.stateFlights, credentialID)
 		}
 		close(flight.done)
-		s.statsMu.Unlock()
+		s.stateMu.Unlock()
 	}()
-	flight.result, flight.err = s.refreshCredentialStatsOnce(ctx, groupID, credentialID)
+	flight.result, flight.err = s.refreshCredentialStateOnce(ctx, groupID, credentialID)
 	return flight.result, flight.err
 }
 
-func (s *Service) refreshCredentialStatsOnce(
+func (s *Service) refreshCredentialStateOnce(
 	ctx context.Context,
 	groupID uint,
 	credentialID uint,
-) (CredentialStatsRefreshResponse, error) {
-	group, credential, err := s.loadStatsRefreshTarget(ctx, groupID, credentialID)
+) (CredentialStateRefreshResponse, error) {
+	group, credential, err := s.loadStateRefreshTarget(ctx, groupID, credentialID)
 	if err != nil {
-		return CredentialStatsRefreshResponse{}, err
+		return CredentialStateRefreshResponse{}, err
 	}
 	channelID := channel.ID(group.ChannelID)
-	// The whole refresh, including any credential token refresh, uses the stats
+	// The whole refresh, including any credential token refresh, uses the state
 	// proxy policy.
-	network, err := s.statsNetworkContext(ctx, s.db)
+	network, err := s.stateNetworkContext(ctx, s.db)
 	if err != nil {
-		return CredentialStatsRefreshResponse{}, err
+		return CredentialStateRefreshResponse{}, err
 	}
 	ctx = subscriptionruntime.WithNetworkContext(ctx, network)
 	transport, err := outboundproxy.ResolveTransport(network.Proxy)
 	if err != nil {
-		return CredentialStatsRefreshResponse{}, app_errors.ErrInternalServer
+		return CredentialStateRefreshResponse{}, app_errors.ErrInternalServer
 	}
 	preparedCredential, err := s.prepareStoredSubscriptionCredential(ctx, group, credential)
 	if err != nil {
-		return CredentialStatsRefreshResponse{}, err
+		return CredentialStateRefreshResponse{}, err
 	}
 	target, err := s.resolveSubscriptionTarget(channelID, group.Params)
 	if err != nil {
-		return CredentialStatsRefreshResponse{}, app_errors.ErrInternalServer
+		return CredentialStateRefreshResponse{}, app_errors.ErrInternalServer
 	}
 	if s.probeSubscriptionTurnState == nil {
-		return CredentialStatsRefreshResponse{}, app_errors.ErrValidation
+		return CredentialStateRefreshResponse{}, app_errors.ErrValidation
 	}
-	request := subscriptionruntime.StatsProbeRequest{
+	request := subscriptionruntime.StateProbeRequest{
 		Model:                execution.CodexTurnStateModel,
-		Input:                statsRefreshInput,
-		ProxyURL:             statsProbeProxyURL(transport),
+		Input:                stateRefreshInput,
+		ProxyURL:             stateProbeProxyURL(transport),
 		ProxyFromEnvironment: transport.FromEnvironment,
 	}
 	var lastErr error
 	attempts := 0
-	for attempts < statsRefreshMaxAttempts {
+	for attempts < stateRefreshMaxAttempts {
 		if err := ctx.Err(); err != nil {
-			return CredentialStatsRefreshResponse{}, err
+			return CredentialStateRefreshResponse{}, err
 		}
 		attempts++
-		attemptContext, cancel := context.WithTimeout(ctx, statsRefreshTimeout)
+		attemptContext, cancel := context.WithTimeout(ctx, stateRefreshTimeout)
 		probed, probeErr := s.probeSubscriptionTurnState(attemptContext, channelID, preparedCredential, target, request)
 		cancel()
 		if probeErr != nil {
 			if ctxErr := ctx.Err(); ctxErr != nil {
-				return CredentialStatsRefreshResponse{}, ctxErr
+				return CredentialStateRefreshResponse{}, ctxErr
 			}
 			lastErr = probeErr
 			continue
@@ -139,9 +139,9 @@ func (s *Service) refreshCredentialStatsOnce(
 		if len(probed.TurnState) == execution.CodexTurnStateLength {
 			refreshedAtMS := s.now().UTC().UnixMilli()
 			if err := s.persistCredentialTurnState(ctx, groupID, credentialID, probed.TurnState); err != nil {
-				return CredentialStatsRefreshResponse{}, err
+				return CredentialStateRefreshResponse{}, err
 			}
-			return CredentialStatsRefreshResponse{
+			return CredentialStateRefreshResponse{
 				TurnState:     probed.TurnState,
 				Attempts:      attempts,
 				RefreshedAtMS: refreshedAtMS,
@@ -152,12 +152,12 @@ func (s *Service) refreshCredentialStatsOnce(
 	if lastErr == nil {
 		lastErr = errors.New("turn state probe produced no result")
 	}
-	return CredentialStatsRefreshResponse{}, statsRefreshError(lastErr)
+	return CredentialStateRefreshResponse{}, stateRefreshError(lastErr)
 }
 
-// loadStatsRefreshTarget loads the subscription group and credential that own
-// one manual stats refresh. The channel must expose the stats probe capability.
-func (s *Service) loadStatsRefreshTarget(
+// loadStateRefreshTarget loads the subscription group and credential that own
+// one manual state refresh. The channel must expose the state probe capability.
+func (s *Service) loadStateRefreshTarget(
 	ctx context.Context,
 	groupID uint,
 	credentialID uint,
@@ -171,7 +171,7 @@ func (s *Service) loadStatsRefreshTarget(
 		if normalizeGroupConnectionType(group.ConnectionType) != models.ConnectionTypeSubscription {
 			return app_errors.ErrValidation
 		}
-		if _, supported := s.subscriptions.StatsProbe(channel.ID(group.ChannelID)); !supported {
+		if _, supported := s.subscriptions.StateProbe(channel.ID(group.ChannelID)); !supported {
 			return app_errors.ErrValidation
 		}
 		return tx.Where("id = ? AND group_id = ?", credentialID, groupID).Take(&credential).Error
@@ -217,10 +217,10 @@ func (s *Service) persistCredentialTurnState(
 	})
 }
 
-// statsProbeProxyURL maps the resolved stats proxy onto the provider's
+// stateProbeProxyURL maps the resolved state proxy onto the provider's
 // transport sentinels: "direct" for a direct connection, empty for the process
 // environment, and the explicit endpoint otherwise.
-func statsProbeProxyURL(transport outboundproxy.ProxyTransport) string {
+func stateProbeProxyURL(transport outboundproxy.ProxyTransport) string {
 	switch {
 	case transport.Direct:
 		return "direct"
@@ -231,9 +231,9 @@ func statsProbeProxyURL(transport outboundproxy.ProxyTransport) string {
 	}
 }
 
-// statsRefreshError classifies one failed stats refresh without leaking the
+// stateRefreshError classifies one failed state refresh without leaking the
 // upstream response body.
-func statsRefreshError(err error) error {
+func stateRefreshError(err error) error {
 	var upstream *subscriptionruntime.UpstreamHTTPError
 	if errors.As(err, &upstream) && upstream != nil {
 		switch upstream.StatusCode {

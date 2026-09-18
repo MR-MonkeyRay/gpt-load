@@ -65,10 +65,10 @@ func installCodexControlTestHooks(service *Service) {
 	service.consumeSubscriptionResetCredit = func(context.Context, channel.ID, subscriptionruntime.Credential, subscriptionruntime.Target, string) (subscriptionruntime.ResetCreditResult, error) {
 		return subscriptionruntime.ResetCreditResult{}, errors.New("test reset-credit action is not configured")
 	}
-	// Tests opt into stats probes explicitly; no fixture may reach a real
+	// Tests opt into state probes explicitly; no fixture may reach a real
 	// provider by accident.
-	service.probeSubscriptionTurnState = func(context.Context, channel.ID, subscriptionruntime.Credential, subscriptionruntime.Target, subscriptionruntime.StatsProbeRequest) (subscriptionruntime.StatsProbeResult, error) {
-		return subscriptionruntime.StatsProbeResult{}, errors.New("test stats probe is not configured")
+	service.probeSubscriptionTurnState = func(context.Context, channel.ID, subscriptionruntime.Credential, subscriptionruntime.Target, subscriptionruntime.StateProbeRequest) (subscriptionruntime.StateProbeResult, error) {
+		return subscriptionruntime.StateProbeResult{}, errors.New("test state probe is not configured")
 	}
 }
 

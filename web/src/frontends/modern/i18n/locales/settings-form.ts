@@ -51,7 +51,7 @@ export const zhCN = {
     affinity_capacity: '亲和缓存容量',
     responses_websocket_enabled: 'Responses WebSocket',
     proxy_config: '上游代理',
-    stats_proxy_config: 'Stats代理',
+    state_proxy_config: 'State代理',
     first_byte_timeout: '响应 / 流式首事件超时',
     request_timeout: '单次上游请求超时',
     stream_idle_timeout: '流空闲超时',
@@ -72,7 +72,7 @@ export const zhCN = {
     affinity_capacity: '最多保留的亲和记录数，范围为 1–1,000,000。',
     responses_websocket_enabled: '关闭会断开受影响的 WebSocket 连接并中断生成，HTTP/SSE 不受影响。',
     proxy_config: '分组与账号可单独覆盖此代理。',
-    stats_proxy_config: '用于手动刷新凭证 stats 的出站代理；未设置时使用全局出站代理。',
+    state_proxy_config: '用于手动刷新凭证 state 的出站代理；未设置时使用全局出站代理。',
     first_byte_timeout: '等待原生响应或流式首个事件的最长时间。',
     request_timeout: '一次上游尝试允许的总时长。',
     stream_idle_timeout: '流式响应中等待后续数据的最长时间。',
@@ -206,7 +206,7 @@ export const enUS = {
     affinity_capacity: 'Affinity cache capacity',
     responses_websocket_enabled: 'Responses WebSocket',
     proxy_config: 'Upstream proxy',
-    stats_proxy_config: 'Stats Proxy',
+    state_proxy_config: 'State Proxy',
     first_byte_timeout: 'Response / first stream event timeout',
     request_timeout: 'Upstream request timeout',
     stream_idle_timeout: 'Stream idle timeout',
@@ -228,8 +228,8 @@ export const enUS = {
     responses_websocket_enabled:
       'Disabling disconnects affected WebSocket sessions and interrupts generation. HTTP/SSE is unaffected.',
     proxy_config: 'Groups and credentials may override this proxy.',
-    stats_proxy_config:
-      'Outbound proxy used for manual credential stats refreshes. Falls back to the global outbound proxy when unset.',
+    state_proxy_config:
+      'Outbound proxy used for manual credential state refreshes. Falls back to the global outbound proxy when unset.',
     first_byte_timeout: 'Maximum wait for the native response or first streaming event.',
     request_timeout: 'Total time allowed for one upstream attempt.',
     stream_idle_timeout: 'Maximum wait between streaming events.',
@@ -367,7 +367,7 @@ export const jaJP = {
     affinity_capacity: '親和性キャッシュ容量',
     responses_websocket_enabled: 'Responses WebSocket',
     proxy_config: '上流プロキシ',
-    stats_proxy_config: 'Statsプロキシ',
+    state_proxy_config: 'Stateプロキシ',
     first_byte_timeout: '応答 / ストリーム初回イベントの待機時間',
     request_timeout: '上流リクエストのタイムアウト',
     stream_idle_timeout: 'ストリームのアイドル時間',
@@ -389,8 +389,8 @@ export const jaJP = {
     responses_websocket_enabled:
       '無効にすると対象の WebSocket 接続を切断し生成を中断します。HTTP/SSE には影響しません。',
     proxy_config: 'グループと認証情報で上書きできます。',
-    stats_proxy_config:
-      '認証情報のstats手動更新に使う上流プロキシ。未設定時はグローバル上流プロキシを使用します。',
+    state_proxy_config:
+      '認証情報のstate手動更新に使う上流プロキシ。未設定時はグローバル上流プロキシを使用します。',
     first_byte_timeout: '元の応答または最初のストリームイベントを待つ上限時間。',
     request_timeout: '1 回の上流試行に許可する合計時間。',
     stream_idle_timeout: 'ストリームの次のデータを待つ上限時間。',

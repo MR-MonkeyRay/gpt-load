@@ -39,7 +39,7 @@ export type SettingsDraft = Record<SettingNumber, string> &
     response_header_rules: HeaderRow[]
     cors: CORSDraft
     proxy_config: ProxyDraft
-    stats_proxy_config: ProxyDraft
+    state_proxy_config: ProxyDraft
   }
 let nextHeader = 0
 export function newHeader(): HeaderRow {
@@ -71,7 +71,7 @@ export function createSettingsDraft(data: SettingsData): SettingsDraft {
     header_rules: headerRows(values.header_rules),
     response_header_rules: headerRows(values.response_header_rules),
     proxy_config: { mode: values.proxy_config.configured_mode, url: '' },
-    stats_proxy_config: { mode: values.stats_proxy_config.configured_mode, url: '' },
+    state_proxy_config: { mode: values.state_proxy_config.configured_mode, url: '' },
     cors: {
       ...values.cors,
       allowed_origins: values.cors.allowed_origins.join('\n'),
@@ -249,7 +249,7 @@ export function settingsErrors(
       if (!validInteger(draft[number], rule.min, rule.max)) errors[key] = 'number'
     } else if (key === 'header_rules' || key === 'response_header_rules') {
       Object.assign(errors, headerErrors(draft[key], key))
-    } else if (key === 'proxy_config' || key === 'stats_proxy_config') {
+    } else if (key === 'proxy_config' || key === 'state_proxy_config') {
       const proxy = draft[key]
       const configured = base.values[key]
       const unchangedURL =
@@ -307,7 +307,7 @@ export function buildSettingsPatch(
         remove: draft[key].filter((row) => row.action === 'remove').map((row) => row.name.trim()),
       }
     } else if (key === 'cors') patch[key] = corsValue(draft.cors)
-    else if (key === 'proxy_config' || key === 'stats_proxy_config') {
+    else if (key === 'proxy_config' || key === 'state_proxy_config') {
       const proxy = draft[key]
       const configured = base.values[key]
       if (

@@ -34,7 +34,7 @@ import {
   exportCredential,
   exportAllCredentials,
   refreshCredentialQuota,
-  refreshCredentialStats,
+  refreshCredentialState,
   resetCredentialQuota,
   revealCredential,
   runCredentialAction,
@@ -629,17 +629,17 @@ async function action(row: CredentialRow, value: string): Promise<void> {
     }
     return
   }
-  if (value === 'stats') {
-    if (!props.channel?.statsRefresh) return
+  if (value === 'state') {
+    if (!props.channel?.stateRefresh) return
     if (!accountBatchPending.value) accountBatch.value = undefined
     mutating.value = row.id
-    pendingAction.value = 'stats'
+    pendingAction.value = 'state'
     cardErrors.value.delete(row.id)
     try {
-      const result = await refreshCredentialStats(client, props.group.id, row.id, controller.signal)
+      const result = await refreshCredentialState(client, props.group.id, row.id, controller.signal)
       if (controller.signal.aborted) return
       // 刷新只改变该账号的 turn state，成功反馈就地展示，不重新拉取凭据列表。
-      notice.value = t('credentialCards.statsRefreshed', {
+      notice.value = t('credentialCards.stateRefreshed', {
         state: truncateTurnState(result.turn_state),
       })
     } catch {

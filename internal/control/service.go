@@ -73,7 +73,7 @@ type Service struct {
 	discoverSubscriptionModels        func(context.Context, channel.ID, subscriptionruntime.Credential, subscriptionruntime.Target) ([]string, error)
 	observeSubscriptionAccount        func(context.Context, channel.ID, subscriptionruntime.Credential, subscriptionruntime.Target) (subscriptionruntime.Observation, error)
 	consumeSubscriptionResetCredit    func(context.Context, channel.ID, subscriptionruntime.Credential, subscriptionruntime.Target, string) (subscriptionruntime.ResetCreditResult, error)
-	probeSubscriptionTurnState        func(context.Context, channel.ID, subscriptionruntime.Credential, subscriptionruntime.Target, subscriptionruntime.StatsProbeRequest) (subscriptionruntime.StatsProbeResult, error)
+	probeSubscriptionTurnState        func(context.Context, channel.ID, subscriptionruntime.Credential, subscriptionruntime.Target, subscriptionruntime.StateProbeRequest) (subscriptionruntime.StateProbeResult, error)
 	oauthCallback                     *OAuthCallbackManager
 	now                               func() time.Time
 	publishSnapshot                   func(state.CompileInput) (*state.ConfigSnapshot, error)
@@ -90,8 +90,8 @@ type Service struct {
 	observationMu         sync.Mutex
 	observationFlights    map[observationFlightKey]*observationFlight
 	observationSemaphore  chan struct{}
-	statsMu               sync.Mutex
-	statsFlights          map[uint]*statsRefreshFlight
+	stateMu               sync.Mutex
+	stateFlights          map[uint]*stateRefreshFlight
 }
 
 type credentialRuntimeRetirer interface {
@@ -250,10 +250,10 @@ func NewService(
 			}
 			return capability.Consume(ctx, credential, target, requestID)
 		},
-		probeSubscriptionTurnState: func(ctx context.Context, channelID channel.ID, credential subscriptionruntime.Credential, target subscriptionruntime.Target, request subscriptionruntime.StatsProbeRequest) (subscriptionruntime.StatsProbeResult, error) {
-			capability, ok := subscriptions.StatsProbe(channelID)
+		probeSubscriptionTurnState: func(ctx context.Context, channelID channel.ID, credential subscriptionruntime.Credential, target subscriptionruntime.Target, request subscriptionruntime.StateProbeRequest) (subscriptionruntime.StateProbeResult, error) {
+			capability, ok := subscriptions.StateProbe(channelID)
 			if !ok {
-				return subscriptionruntime.StatsProbeResult{}, app_errors.ErrValidation
+				return subscriptionruntime.StateProbeResult{}, app_errors.ErrValidation
 			}
 			return capability.ProbeTurnState(ctx, credential, target, request)
 		},

@@ -66,11 +66,11 @@ func (testResetCredit) Consume(context.Context, Credential, Target, string) (Res
 	return ResetCreditResult{}, nil
 }
 
-type testStatsProbe struct{ id spec.ActionID }
+type testStateProbe struct{ id spec.ActionID }
 
-func (value testStatsProbe) ID() spec.ActionID { return value.id }
-func (testStatsProbe) ProbeTurnState(context.Context, Credential, Target, StatsProbeRequest) (StatsProbeResult, error) {
-	return StatsProbeResult{}, nil
+func (value testStateProbe) ID() spec.ActionID { return value.id }
+func (testStateProbe) ProbeTurnState(context.Context, Credential, Target, StateProbeRequest) (StateProbeResult, error) {
+	return StateProbeResult{}, nil
 }
 
 type testBrowserDriver struct{ duplicateDriver }
@@ -82,7 +82,7 @@ func (testBrowserDriver) CompleteAuthorization(context.Context, AuthorizationCom
 func (testBrowserDriver) AuthorizationFailureDefinitive(error) bool { return false }
 func (testBrowserDriver) LocalCallback() (LocalCallbackSpec, bool)  { return LocalCallbackSpec{}, false }
 
-func completeTestRuntimeImplementations() ([]Driver, []ModelDiscovery, []QuotaObservation, []ResetCreditAction, []StatsProbe) {
+func completeTestRuntimeImplementations() ([]Driver, []ModelDiscovery, []QuotaObservation, []ResetCreditAction, []StateProbe) {
 	return []Driver{
 			testBrowserDriver{duplicateDriver{id: modules.CodexSubscriptionDriver}},
 			testBrowserDriver{duplicateDriver{id: modules.ClaudeSubscriptionDriver}},
@@ -99,8 +99,8 @@ func completeTestRuntimeImplementations() ([]Driver, []ModelDiscovery, []QuotaOb
 			testObservation{id: modules.AntigravityQuotaObservation},
 		}, []ResetCreditAction{
 			testResetCredit{id: modules.CodexResetCreditAction},
-		}, []StatsProbe{
-			testStatsProbe{id: modules.CodexStatsProbe},
+		}, []StateProbe{
+			testStateProbe{id: modules.CodexStateProbe},
 		}
 }
 

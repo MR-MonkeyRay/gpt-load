@@ -534,6 +534,23 @@ func (s *Server) handleRefreshGroupCredentialObservation(c *gin.Context) {
 	response.SuccessI18n(c, "common.success", result)
 }
 
+func (s *Server) handleGetGroupCredentialState(c *gin.Context) {
+	groupID, ok := groupID(c, "get_group_credential_state")
+	if !ok {
+		return
+	}
+	credentialID, ok := credentialID(c, "get_group_credential_state")
+	if !ok {
+		return
+	}
+	result, err := s.service.GetCredentialState(c.Request.Context(), groupID, credentialID)
+	if err != nil {
+		writeServiceError(c, "get_group_credential_state", err)
+		return
+	}
+	response.SuccessI18n(c, "common.success", result)
+}
+
 func (s *Server) handleRefreshGroupCredentialState(c *gin.Context) {
 	groupID, ok := groupID(c, "refresh_group_credential_state")
 	if !ok {

@@ -26,6 +26,8 @@ import type {
   CredentialResetCreditConsumeDto,
   CredentialRecoveryDto,
   CredentialRevealDto,
+  CredentialStateDto,
+  CredentialStateRecordDto,
   CredentialStateRefreshDto,
   CredentialStatus,
   CredentialSummaryDto,
@@ -187,6 +189,22 @@ const observationSnapshotFields = [
   'reset_credits',
 ] as const
 const stateRefreshFields = ['turn_state', 'attempts', 'refreshed_at_ms'] as const
+const stateRecordFields = [
+  'id',
+  'status',
+  'error_code',
+  'turn_state',
+  'state_length',
+  'attempts',
+  'http_status',
+  'model',
+  'input',
+  'proxy_url',
+  'base_url',
+  'duration_ms',
+  'created_at_ms',
+] as const
+const stateRefreshStatuses = ['succeeded', 'failed'] as const
 const planFields = ['name', 'level'] as const
 const observationAccountFields = [
   'display_name',
@@ -511,6 +529,30 @@ function projectCredentialStateRefresh(value: unknown): CredentialStateRefreshDt
     turn_state: projectString(record.turn_state, { allowEmpty: true }),
     attempts: projectSafeInteger(record.attempts, { minimum: 0 }),
     refreshed_at_ms: projectEpochMilliseconds(record.refreshed_at_ms),
+  }
+}
+
+function projectCredentialStateRecord(value: unknown): CredentialStateRecordDto {
+  const record = projectRecord(value)
+  assertNoSecretLikeFields(record, stateRecordFields)
+  return {
+    id: projectSafeInteger(record.id, { minimum: 1 }),
+    status: projectEnum(record.status, stateRefreshStatuses),
+    ...(record.error_code === undefined
+      ? {}
+      : { error_code: projectString(record.error_code, { allowEmpty: true }) }),
+    turn_state: projectString(record.turn_state, { allowEmpty: true }),
+    state_length: projectSafeInteger(record.state_length, { minimum: 0 }),
+    attempts: projectSafeInteger(record.attempts, { minimum: 0 }),
+    ...(record.http_status === undefined
+      ? {}
+      : { http_status: projectSafeInteger(record.http_status, { minimum: 100 }) }),
+    model: projectString(record.model, { allowEmpty: true }),
+    input: projectString(record.input, { allowEmpty: true }),
+    proxy_url: projectString(record.proxy_url, { allowEmpty: true }),
+    base_url: projectString(record.base_url, { allowEmpty: true }),
+    duration_ms: projectSafeInteger(record.duration_ms, { minimum: 0 }),
+    created_at_ms: projectEpochMilliseconds(record.created_at_ms),
   }
 }
 
@@ -998,6 +1040,35 @@ export async function refreshCredentialState(
       signal,
     }),
   )
+}
+
+export async function getCredentialState(
+  client: ApiClient,
+  groupId: number,
+  credentialId: number,
+  signal?: AbortSignal,
+): Promise<CredentialStateDto> {
+  const record = projectRecord(
+    await client.request(`/api/groups/${groupId}/credentials/${credentialId}/state-refresh`, {
+      signal,
+    }),
+  )
+  assertNoSecretLikeFields(record, [
+    'turn_state',
+    'turn_state_length',
+    'required_length',
+    'refreshed_at_ms',
+    'logs',
+  ])
+  return {
+    turn_state: projectString(record.turn_state, { allowEmpty: true }),
+    turn_state_length: projectSafeInteger(record.turn_state_length, { minimum: 0 }),
+    required_length: projectSafeInteger(record.required_length, { minimum: 1 }),
+    ...(record.refreshed_at_ms === undefined || record.refreshed_at_ms === null
+      ? {}
+      : { refreshed_at_ms: projectEpochMilliseconds(record.refreshed_at_ms) }),
+    logs: projectArray(record.logs, projectCredentialStateRecord),
+  }
 }
 
 export async function refreshCredential(

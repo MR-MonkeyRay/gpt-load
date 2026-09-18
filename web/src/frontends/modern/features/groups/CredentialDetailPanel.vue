@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { Info } from '@lucide/vue'
+import { Info, RefreshCw } from '@lucide/vue'
 import { useQuery, useQueryClient } from '@tanstack/vue-query'
 import { computed, onScopeDispose, ref, watch } from 'vue'
 import { useMessageSource } from '@modern/app/messages'
@@ -7,6 +7,8 @@ import { useI18n } from 'vue-i18n'
 import {
   credentialDetailKey,
   getCredentialDetail,
+  getCredentialState,
+  refreshCredentialState,
   updateCredential,
 } from '@modern/api/credential-actions'
 import type { CredentialRow } from '@modern/api/group-detail'
@@ -17,6 +19,7 @@ import {
   AppButton,
   AppCollectionState,
   AppIcon,
+  AppNotice,
   AppOverflowText,
   AppSegmentedField,
   AppTextField,
@@ -130,6 +133,62 @@ async function save(): Promise<void> {
   }
 }
 onScopeDispose(() => controller.abort())
+
+// State 区块：查看已保留的 state 与记录时间，并回看逐次刷新记录。
+const supportsStateRefresh = computed(() => Boolean(props.channel?.stateRefresh))
+const stateQuery = useQuery({
+  queryKey: ['modern', 'credential-state', props.group.id, props.row.id] as const,
+  queryFn: ({ signal }) => getCredentialState(client, props.group.id, props.row.id, signal),
+  enabled: computed(() => supportsStateRefresh.value),
+})
+const stateRefreshing = ref(false)
+const stateFeedback = ref<{ tone: 'success' | 'danger'; text: string }>()
+const stateController = new AbortController()
+function statePreview(value: string): string {
+  return value.length > 16 ? `${value.slice(0, 16)}…` : value
+}
+function stateProxyLabel(value: string): string {
+  if (value === 'direct') return t('credentialCards.state.proxyDirect')
+  return value === '' ? t('credentialCards.state.proxyEnvironment') : value
+}
+function stateFailureLabel(code: string): string {
+  const key = `credentialCards.state.failure.${code}`
+  return te(key) ? t(key) : code
+}
+function stateRecordTime(value: number | null): string {
+  return value ? credentialTime(value, locale.value) : '—'
+}
+async function refreshState(): Promise<void> {
+  if (stateRefreshing.value || !supportsStateRefresh.value) return
+  stateRefreshing.value = true
+  stateFeedback.value = undefined
+  try {
+    const result = await refreshCredentialState(
+      client,
+      props.group.id,
+      props.row.id,
+      stateController.signal,
+    )
+    if (stateController.signal.aborted) return
+    stateFeedback.value = {
+      tone: 'success',
+      text: `${t('credentialCards.stateRefreshed', { state: statePreview(result.turn_state) })} · ${t(
+        'credentialCards.state.recordedAt',
+      )} ${stateRecordTime(result.refreshed_at_ms)}`,
+    }
+    await stateQuery.refetch()
+  } catch {
+    if (!stateController.signal.aborted) {
+      stateFeedback.value = {
+        tone: 'danger',
+        text: t('credentialCards.state.refreshFailed'),
+      }
+    }
+  } finally {
+    stateRefreshing.value = false
+  }
+}
+onScopeDispose(() => stateController.abort())
 useMessageSource(() => (error.value ? { text: error.value, tone: 'danger' } : undefined))
 useMessageSource(() =>
   query.isError.value && saved.value
@@ -289,6 +348,107 @@ useMessageSource(() =>
           autocomplete="off"
         />
       </section>
+      <section v-if="supportsStateRefresh" class="modern-credential-detail-section">
+        <div class="modern-credential-detail-title">
+          <h3>{{ t('credentialCards.state.title') }}</h3>
+          <AppButton
+            variant="outline"
+            size="xs"
+            :icon="RefreshCw"
+            :loading="stateRefreshing"
+            @click="refreshState"
+          >
+            {{ t('credentialCards.stateRefresh') }}
+          </AppButton>
+        </div>
+        <AppNotice v-if="stateFeedback" :tone="stateFeedback.tone">{{
+          stateFeedback.text
+        }}</AppNotice>
+        <dl class="modern-credential-detail-metrics">
+          <div>
+            <dt>{{ t('credentialCards.state.current') }}</dt>
+            <dd>
+              <code v-if="stateQuery.data.value?.turnState" class="modern-state-value">{{
+                stateQuery.data.value.turnState
+              }}</code>
+              <span v-else>{{ t('credentialCards.state.empty') }}</span>
+            </dd>
+          </div>
+          <div>
+            <dt>{{ t('credentialCards.state.recordedAt') }}</dt>
+            <dd>{{ stateRecordTime(stateQuery.data.value?.refreshedAt ?? null) }}</dd>
+          </div>
+        </dl>
+        <p v-if="stateQuery.data.value" class="modern-credential-detail-hint">
+          {{
+            t('credentialCards.state.retained', { length: n(stateQuery.data.value.requiredLength) })
+          }}
+        </p>
+        <div class="modern-state-history">
+          <span class="modern-state-history-title">{{ t('credentialCards.state.history') }}</span>
+          <p v-if="stateQuery.isPending.value" class="modern-credential-detail-hint">
+            {{ t('collection.loading') }}
+          </p>
+          <p v-else-if="stateQuery.isError.value" class="modern-credential-detail-hint">
+            {{ t('credentialCards.state.loadFailed') }}
+          </p>
+          <p v-else-if="!stateQuery.data.value?.logs.length" class="modern-credential-detail-hint">
+            {{ t('credentialCards.state.historyEmpty') }}
+          </p>
+          <details
+            v-for="log in stateQuery.data.value?.logs ?? []"
+            :key="log.id"
+            class="modern-state-record"
+          >
+            <summary>
+              <AppBadge :tone="log.status === 'succeeded' ? 'success' : 'danger'" size="xs" dot>{{
+                t(`credentialCards.state.status.${log.status}`)
+              }}</AppBadge>
+              <span>{{ credentialTime(log.createdAt, locale) }}</span>
+              <span>{{ t('credentialCards.state.attempts', { count: n(log.attempts) }) }}</span>
+              <span>{{
+                t('credentialCards.state.stateLength', { length: n(log.stateLength) })
+              }}</span>
+            </summary>
+            <dl class="modern-state-record-grid">
+              <div>
+                <dt>{{ t('credentialCards.state.model') }}</dt>
+                <dd>{{ log.model }}</dd>
+              </div>
+              <div>
+                <dt>{{ t('credentialCards.state.input') }}</dt>
+                <dd>{{ log.input }}</dd>
+              </div>
+              <div>
+                <dt>{{ t('credentialCards.state.proxy') }}</dt>
+                <dd>{{ stateProxyLabel(log.proxyUrl) }}</dd>
+              </div>
+              <div>
+                <dt>{{ t('credentialCards.state.baseURL') }}</dt>
+                <dd>{{ log.baseUrl || t('credentialCards.state.baseURLDefault') }}</dd>
+              </div>
+              <div>
+                <dt>{{ t('credentialCards.state.duration') }}</dt>
+                <dd>{{ n(log.durationMs) }} ms</dd>
+              </div>
+              <div v-if="log.status === 'failed'">
+                <dt>{{ t('credentialCards.state.result') }}</dt>
+                <dd>{{ stateFailureLabel(log.errorCode) }}</dd>
+              </div>
+              <div v-if="log.httpStatus !== null">
+                <dt>{{ t('credentialCards.state.httpStatus') }}</dt>
+                <dd>{{ log.httpStatus }}</dd>
+              </div>
+              <div v-if="log.turnState">
+                <dt>{{ t('credentialCards.state.captured') }}</dt>
+                <dd>
+                  <code class="modern-state-value">{{ log.turnState }}</code>
+                </dd>
+              </div>
+            </dl>
+          </details>
+        </div>
+      </section>
     </template>
   </GroupWorkspacePanel>
 </template>
@@ -365,6 +525,69 @@ useMessageSource(() =>
   grid-template-columns: minmax(0, 112px) minmax(0, 1fr);
   align-items: start;
   gap: var(--modern-space-3);
+}
+.modern-state-value {
+  display: block;
+  /* 完整 State 可滚动查看，避免 292 字符撑高整个区块。 */
+  max-height: 6.5em;
+  overflow-y: auto;
+  font-family: var(--modern-font-mono);
+  font-size: var(--modern-font-size-small);
+  overflow-wrap: anywhere;
+}
+.modern-state-history {
+  display: grid;
+  gap: var(--modern-space-2);
+  min-width: 0;
+}
+.modern-state-history-title {
+  color: var(--modern-muted);
+  font-size: var(--modern-font-size-small);
+}
+.modern-state-record {
+  border: var(--modern-line-width) solid var(--modern-border);
+  border-radius: var(--modern-radius-control);
+  padding: var(--modern-space-2) var(--modern-space-3);
+}
+.modern-state-record > summary {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--modern-space-1) var(--modern-space-3);
+  border-radius: var(--modern-radius-small);
+  color: var(--modern-muted);
+  font-size: var(--modern-font-size-small);
+  font-variant-numeric: tabular-nums;
+  cursor: pointer;
+}
+.modern-state-record > summary:focus-visible {
+  outline: var(--modern-focus-width) solid var(--modern-accent);
+  outline-offset: var(--modern-space-0-5);
+}
+.modern-state-record[open] > summary {
+  margin-bottom: var(--modern-space-2);
+}
+.modern-state-record-grid {
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr);
+  gap: var(--modern-space-1) var(--modern-space-3);
+  font-size: var(--modern-font-size-small);
+}
+.modern-state-record-grid > div {
+  display: grid;
+  grid-column: span 2;
+  grid-template-columns: subgrid;
+  align-items: baseline;
+  gap: var(--modern-space-2);
+  min-width: 0;
+}
+.modern-state-record-grid dt {
+  color: var(--modern-muted);
+}
+.modern-state-record-grid dd {
+  margin: 0;
+  min-width: 0;
+  overflow-wrap: anywhere;
 }
 @container modern-workspace-panel (max-width: 380px) {
   .modern-credential-detail-metrics {

@@ -125,6 +125,67 @@ export async function refreshCredentialState(
     refreshed_at_ms: integer(data.refreshed_at_ms),
   }
 }
+export interface CredentialStateRefreshRecord {
+  id: number
+  status: 'succeeded' | 'failed'
+  errorCode: string
+  turnState: string
+  stateLength: number
+  attempts: number
+  httpStatus: number | null
+  model: string
+  input: string
+  proxyUrl: string
+  baseUrl: string
+  durationMs: number
+  createdAt: number
+}
+export interface CredentialStateSnapshot {
+  turnState: string
+  turnStateLength: number
+  requiredLength: number
+  refreshedAt: number | null
+  logs: CredentialStateRefreshRecord[]
+}
+function readStateRefreshRecord(value: unknown): CredentialStateRefreshRecord {
+  const row = record(value)
+  return {
+    id: integer(row.id, 1),
+    status: oneOf(row.status, ['succeeded', 'failed']),
+    errorCode: row.error_code === undefined ? '' : text(row.error_code),
+    turnState: text(row.turn_state),
+    stateLength: integer(row.state_length),
+    attempts: integer(row.attempts),
+    httpStatus: row.http_status === undefined ? null : integer(row.http_status, 100),
+    model: text(row.model),
+    input: text(row.input),
+    proxyUrl: text(row.proxy_url),
+    baseUrl: text(row.base_url),
+    durationMs: integer(row.duration_ms),
+    createdAt: integer(row.created_at_ms, 1),
+  }
+}
+// 只保留完整长度的 state，读取同时回看最近的刷新记录。
+export async function getCredentialState(
+  client: ApiClient,
+  group: number,
+  id: number,
+  signal: AbortSignal,
+): Promise<CredentialStateSnapshot> {
+  const data = record(
+    await client.request(`/api/groups/${group}/credentials/${id}/state-refresh`, { signal }),
+  )
+  return {
+    turnState: text(data.turn_state),
+    turnStateLength: integer(data.turn_state_length),
+    requiredLength: integer(data.required_length, 1),
+    refreshedAt:
+      data.refreshed_at_ms === null || data.refreshed_at_ms === undefined
+        ? null
+        : integer(data.refreshed_at_ms, 1),
+    logs: list(data.logs).map(readStateRefreshRecord),
+  }
+}
 export async function revealCredential(
   client: ApiClient,
   group: number,

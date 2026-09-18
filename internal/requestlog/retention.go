@@ -17,6 +17,7 @@ const (
 	retentionBatchSize                   = 1000
 	usageAggregationJournalRetentionDays = 35
 	quotaHistoryRetentionDays            = 35
+	stateRefreshLogRetentionDays         = 35
 )
 
 // Sweep removes request logs and aggregation journals strictly older than
@@ -51,6 +52,11 @@ func (service *Service) Sweep(ctx context.Context, now time.Time) {
 		service.recordRetentionDeleteFailure(now)
 		return
 	}
+	stateRefreshLogCutoffMS, err := retentionCutoffMS(nowMS, stateRefreshLogRetentionDays)
+	if err != nil {
+		service.recordRetentionDeleteFailure(now)
+		return
+	}
 	journalCutoffMS, err = epochms.AlignDown(
 		journalCutoffMS,
 		epochms.MillisecondsPerHour,
@@ -66,6 +72,30 @@ func (service *Service) Sweep(ctx context.Context, now time.Time) {
 	}
 	service.deleteExpiredUsageJournals(ctx, journalCutoffMS, now)
 	service.deleteExpiredQuotaHistory(ctx, quotaHistoryCutoffMS, now)
+	service.deleteExpiredStateRefreshLogs(ctx, stateRefreshLogCutoffMS, now)
+}
+
+// 状态刷新日志与额度历史同样独立保留 35 天。
+func (service *Service) deleteExpiredStateRefreshLogs(ctx context.Context, cutoffMS int64, now time.Time) {
+	for ctx.Err() == nil {
+		var ids []uint
+		if err := service.db.WithContext(ctx).Model(&models.CredentialStateRefreshLog{}).
+			Where("created_at_ms < ?", cutoffMS).Order("created_at_ms ASC").Limit(retentionBatchSize).Pluck("id", &ids).Error; err != nil {
+			if ctx.Err() == nil {
+				service.recordRetentionDeleteFailure(now)
+			}
+			return
+		}
+		if len(ids) == 0 {
+			return
+		}
+		if err := service.db.WithContext(ctx).Where("id IN ?", ids).Delete(&models.CredentialStateRefreshLog{}).Error; err != nil {
+			if ctx.Err() == nil {
+				service.recordRetentionDeleteFailure(now)
+			}
+			return
+		}
+	}
 }
 
 // 额度历史独立保留 35 天，小时用量聚合仍长期保留。

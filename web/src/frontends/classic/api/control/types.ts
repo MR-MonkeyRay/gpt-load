@@ -258,6 +258,32 @@ export interface CredentialStateRefreshDto {
   refreshed_at_ms: number
 }
 
+/** 一次手动 State 刷新的持久记录，成功与失败都保留。 */
+export interface CredentialStateRecordDto {
+  id: number
+  status: 'succeeded' | 'failed'
+  error_code?: string
+  turn_state: string
+  state_length: number
+  attempts: number
+  http_status?: number
+  model: string
+  input: string
+  proxy_url: string
+  base_url: string
+  duration_ms: number
+  created_at_ms: number
+}
+
+/** 已保留的 State 及其记录时间，附带最近刷新记录。 */
+export interface CredentialStateDto {
+  turn_state: string
+  turn_state_length: number
+  required_length: number
+  refreshed_at_ms?: number
+  logs: CredentialStateRecordDto[]
+}
+
 export interface CredentialResetCreditConsumeDto {
   status: 'succeeded'
   windows_reset: number

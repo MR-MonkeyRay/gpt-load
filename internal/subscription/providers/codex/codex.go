@@ -214,7 +214,7 @@ func ObserveAccount(ctx context.Context, credential Credential, apiRoot string) 
 	}
 	value, err := cpaembedded.ObserveCodexAccount(ctx, credentialToBridge(credential), endpoints.AccountBase, options)
 	if err != nil {
-		return AccountObservation{}, normalizeUpstreamError(err)
+		return AccountObservation{}, normalizeUpstreamError("account observation", err)
 	}
 	return AccountObservation{Payload: append([]byte(nil), value.Payload...), Header: value.Header.Clone()}, nil
 }
@@ -231,7 +231,7 @@ func ObserveResetCredits(ctx context.Context, credential Credential, apiRoot str
 	}
 	value, err := cpaembedded.ObserveCodexResetCredits(ctx, credentialToBridge(credential), endpoints.AccountBase, options)
 	if err != nil {
-		return AccountObservation{}, normalizeUpstreamError(err)
+		return AccountObservation{}, normalizeUpstreamError("account observation", err)
 	}
 	return AccountObservation{Payload: append([]byte(nil), value.Payload...), Header: value.Header.Clone()}, nil
 }
@@ -249,7 +249,7 @@ func ConsumeResetCredit(ctx context.Context, credential Credential, apiRoot, red
 	}
 	value, err := cpaembedded.ConsumeCodexResetCredit(ctx, credentialToBridge(credential), endpoints.AccountBase, redeemRequestID, options)
 	if err != nil {
-		return AccountObservation{}, normalizeUpstreamError(err)
+		return AccountObservation{}, normalizeUpstreamError("account observation", err)
 	}
 	return AccountObservation{Payload: append([]byte(nil), value.Payload...), Header: value.Header.Clone()}, nil
 }
@@ -306,7 +306,7 @@ func ProbeTurnState(
 		ProxyFromEnvironment: request.ProxyFromEnvironment,
 	})
 	if err != nil {
-		return "", normalizeUpstreamError(err)
+		return "", normalizeUpstreamError("state probe", err)
 	}
 	if response == nil {
 		return "", errors.New("codex state probe returned no response")
@@ -322,10 +322,21 @@ func codexOptions(ctx context.Context) (cpaembedded.Options, error) {
 	return cpaembedded.Options{HTTPClient: client}, nil
 }
 
-func normalizeUpstreamError(err error) error {
+func normalizeUpstreamError(operation string, err error) error {
 	var upstream *cpaembedded.UpstreamHTTPError
 	if errors.As(err, &upstream) {
 		return &UpstreamHTTPError{Operation: upstream.Operation, StatusCode: upstream.StatusCode}
+	}
+	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		return err
+	}
+	// Streaming executions report the provider status through an unexported
+	// bridge error type, so the status accessor is the only stable signal.
+	var statusErr interface{ StatusCode() int }
+	if errors.As(err, &statusErr) && statusErr != nil {
+		if status := statusErr.StatusCode(); status > 0 {
+			return &UpstreamHTTPError{Operation: operation, StatusCode: status}
+		}
 	}
 	return err
 }

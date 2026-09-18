@@ -1,14 +1,12 @@
 <script setup lang="ts">
-import { Activity, Download, Eye, KeyRound, RotateCcw, Stethoscope, Trash2 } from '@lucide/vue'
+import { Download, Eye, KeyRound, RotateCcw, Stethoscope, Trash2 } from '@lucide/vue'
 import { computed } from 'vue'
 import { useI18n } from 'vue-i18n'
 import type { CredentialRow } from '@modern/api/group-detail'
-import type { GroupChannel } from '@modern/api/group-create'
 import { AppActionMenu, AppIconButton } from '@modern/components/ui'
 const props = defineProps<{
   row: CredentialRow
   subscription?: boolean
-  channel?: GroupChannel
   disabled?: boolean
 }>()
 defineEmits<{ action: [value: string] }>()
@@ -25,9 +23,6 @@ const actions = computed(() => [
         { id: 'download', label: t('credentialCards.export'), icon: Download },
       ]
     : [{ id: 'test', label: t('credentialCards.test'), icon: Stethoscope }]),
-  ...(props.channel?.stateRefresh
-    ? [{ id: 'state', label: t('credentialCards.stateRefresh'), icon: Activity }]
-    : []),
   ...(props.row.state === 'cooldown' ||
   props.row.state === 'blacklisted' ||
   props.row.modelCooldowns.length

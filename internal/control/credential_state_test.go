@@ -237,3 +237,201 @@ func TestRefreshCredentialStateUsesStateProxyPrecedence(t *testing.T) {
 		t.Fatalf("state reset probe = %#v", got)
 	}
 }
+
+func TestRefreshCredentialStateRecordsProbeOutcomes(t *testing.T) {
+	t.Parallel()
+
+	fixture, groupID, credentialID := newSubscriptionCredentialFixture(t)
+	now := time.UnixMilli(1_800_000_000_000)
+	fixture.service.now = func() time.Time { return now }
+	complete := strings.Repeat("s", execution.CodexTurnStateLength)
+	fixture.service.probeSubscriptionTurnState = func(
+		context.Context,
+		channel.ID,
+		subscriptionruntime.Credential,
+		subscriptionruntime.Target,
+		subscriptionruntime.StateProbeRequest,
+	) (subscriptionruntime.StateProbeResult, error) {
+		return subscriptionruntime.StateProbeResult{TurnState: complete}, nil
+	}
+	if _, err := fixture.service.RefreshCredentialState(t.Context(), groupID, credentialID); err != nil {
+		t.Fatalf("RefreshCredentialState() error = %v", err)
+	}
+	var succeeded models.CredentialStateRefreshLog
+	if err := fixture.db.Where("credential_id = ?", credentialID).Take(&succeeded).Error; err != nil {
+		t.Fatal(err)
+	}
+	if succeeded.Status != models.CredentialStateRefreshSucceeded || succeeded.TurnState != complete ||
+		succeeded.StateLength != execution.CodexTurnStateLength || succeeded.Attempts != 1 ||
+		succeeded.ErrorCode != "" || succeeded.HTTPStatus != nil ||
+		succeeded.Model != execution.CodexTurnStateModel || succeeded.Input != stateRefreshInput ||
+		succeeded.ProxyURL != "direct" || succeeded.CreatedAtMS != now.UnixMilli() {
+		t.Fatalf("successful refresh log = %#v", succeeded)
+	}
+	// 组内没有 base_url 覆盖时探测走官方端点，日志保留空覆盖值。
+	if succeeded.BaseURL != "" {
+		t.Fatalf("successful refresh base url = %q", succeeded.BaseURL)
+	}
+
+	fixture.service.probeSubscriptionTurnState = func(
+		context.Context,
+		channel.ID,
+		subscriptionruntime.Credential,
+		subscriptionruntime.Target,
+		subscriptionruntime.StateProbeRequest,
+	) (subscriptionruntime.StateProbeResult, error) {
+		return subscriptionruntime.StateProbeResult{}, &subscriptionruntime.UpstreamHTTPError{StatusCode: http.StatusUnauthorized}
+	}
+	if _, err := fixture.service.RefreshCredentialState(t.Context(), groupID, credentialID); !errors.Is(err, app_errors.ErrCredentialReauthorizationRequired) {
+		t.Fatalf("unauthorized refresh error = %v", err)
+	}
+	var unauthorized models.CredentialStateRefreshLog
+	if err := fixture.db.Where("credential_id = ?", credentialID).Order("id DESC").Take(&unauthorized).Error; err != nil {
+		t.Fatal(err)
+	}
+	if unauthorized.Status != models.CredentialStateRefreshFailed || unauthorized.ErrorCode != "unauthorized" ||
+		unauthorized.HTTPStatus == nil || *unauthorized.HTTPStatus != http.StatusUnauthorized ||
+		unauthorized.TurnState != "" || unauthorized.StateLength != 0 ||
+		unauthorized.Attempts != stateRefreshMaxAttempts || unauthorized.CreatedAtMS != now.UnixMilli() {
+		t.Fatalf("unauthorized refresh log = %#v", unauthorized)
+	}
+
+	incomplete := "incomplete"
+	fixture.service.probeSubscriptionTurnState = func(
+		context.Context,
+		channel.ID,
+		subscriptionruntime.Credential,
+		subscriptionruntime.Target,
+		subscriptionruntime.StateProbeRequest,
+	) (subscriptionruntime.StateProbeResult, error) {
+		return subscriptionruntime.StateProbeResult{TurnState: incomplete}, nil
+	}
+	if _, err := fixture.service.RefreshCredentialState(t.Context(), groupID, credentialID); err == nil {
+		t.Fatal("RefreshCredentialState() accepted an incomplete turn state")
+	}
+	var mismatched models.CredentialStateRefreshLog
+	if err := fixture.db.Where("credential_id = ?", credentialID).Order("id DESC").Take(&mismatched).Error; err != nil {
+		t.Fatal(err)
+	}
+	if mismatched.Status != models.CredentialStateRefreshFailed || mismatched.ErrorCode != "length_mismatch" ||
+		mismatched.StateLength != len(incomplete) || mismatched.TurnState != "" ||
+		mismatched.HTTPStatus != nil || mismatched.Attempts != stateRefreshMaxAttempts {
+		t.Fatalf("length mismatch refresh log = %#v", mismatched)
+	}
+
+	// 失败刷新不清除已保留的状态与其记录时间。
+	var row models.Credential
+	if err := fixture.db.Take(&row, credentialID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if row.TurnState != complete || row.TurnStateRefreshedAtMS != now.UnixMilli() {
+		t.Fatalf("retained state after failures = %#v", row)
+	}
+}
+
+func TestGetCredentialStateReturnsStoredStateAndRecentLogs(t *testing.T) {
+	t.Parallel()
+
+	fixture, groupID, credentialID := newSubscriptionCredentialFixture(t)
+	empty, err := fixture.service.GetCredentialState(t.Context(), groupID, credentialID)
+	if err != nil {
+		t.Fatalf("GetCredentialState() error = %v", err)
+	}
+	if empty.TurnState != "" || empty.TurnStateLength != 0 || empty.RefreshedAtMS != nil || len(empty.Logs) != 0 {
+		t.Fatalf("unrefreshed state payload = %#v", empty)
+	}
+
+	now := time.UnixMilli(1_800_000_000_000)
+	fixture.service.now = func() time.Time { return now }
+	complete := strings.Repeat("s", execution.CodexTurnStateLength)
+	fixture.service.probeSubscriptionTurnState = func(
+		context.Context,
+		channel.ID,
+		subscriptionruntime.Credential,
+		subscriptionruntime.Target,
+		subscriptionruntime.StateProbeRequest,
+	) (subscriptionruntime.StateProbeResult, error) {
+		return subscriptionruntime.StateProbeResult{TurnState: complete}, nil
+	}
+	if _, err := fixture.service.RefreshCredentialState(t.Context(), groupID, credentialID); err != nil {
+		t.Fatalf("RefreshCredentialState() error = %v", err)
+	}
+
+	state, err := fixture.service.GetCredentialState(t.Context(), groupID, credentialID)
+	if err != nil {
+		t.Fatalf("GetCredentialState() error = %v", err)
+	}
+	if state.TurnState != complete || state.TurnStateLength != execution.CodexTurnStateLength {
+		t.Fatalf("state payload = %#v", state)
+	}
+	if state.RefreshedAtMS == nil || *state.RefreshedAtMS != now.UnixMilli() {
+		t.Fatalf("state record time = %#v", state.RefreshedAtMS)
+	}
+	if len(state.Logs) != 1 || state.Logs[0].Status != string(models.CredentialStateRefreshSucceeded) ||
+		state.Logs[0].TurnState != complete || state.Logs[0].Model != execution.CodexTurnStateModel {
+		t.Fatalf("state logs = %#v", state.Logs)
+	}
+
+	group := models.Group{
+		Name: "api-key-state-read", ChannelID: string(channel.OpenAI),
+		ConnectionType: models.ConnectionTypeAPIKey, Params: models.JSON(`{}`),
+		Models: models.JSON(`[]`), Enabled: true,
+	}
+	if err := fixture.db.Create(&group).Error; err != nil {
+		t.Fatal(err)
+	}
+	other := models.Credential{GroupID: group.ID, Data: "{}", Fingerprint: "fp-read", IdentityFingerprint: "identity-read"}
+	if err := fixture.db.Create(&other).Error; err != nil {
+		t.Fatal(err)
+	}
+	if _, err := fixture.service.GetCredentialState(t.Context(), group.ID, other.ID); !errors.Is(err, app_errors.ErrValidation) {
+		t.Fatalf("api-key state read error = %v", err)
+	}
+	if _, err := fixture.service.GetCredentialState(t.Context(), groupID, credentialID+1000); !errors.Is(err, app_errors.ErrResourceNotFound) {
+		t.Fatalf("missing credential state read error = %v", err)
+	}
+}
+
+func TestCredentialStateRouteReturnsStoredStateAndLogs(t *testing.T) {
+	t.Parallel()
+
+	initControlI18n(t)
+	fixture, groupID, credentialID := newSubscriptionCredentialFixture(t)
+	now := time.UnixMilli(1_800_000_000_000)
+	fixture.service.now = func() time.Time { return now }
+	complete := strings.Repeat("s", execution.CodexTurnStateLength)
+	fixture.service.probeSubscriptionTurnState = func(
+		context.Context,
+		channel.ID,
+		subscriptionruntime.Credential,
+		subscriptionruntime.Target,
+		subscriptionruntime.StateProbeRequest,
+	) (subscriptionruntime.StateProbeResult, error) {
+		return subscriptionruntime.StateProbeResult{TurnState: complete}, nil
+	}
+	if _, err := fixture.service.RefreshCredentialState(t.Context(), groupID, credentialID); err != nil {
+		t.Fatalf("RefreshCredentialState() error = %v", err)
+	}
+	engine := gin.New()
+	NewServer(&config.Config{AuthKey: "test-auth-key"}, fixture.service).RegisterRoutes(engine)
+
+	request := httptest.NewRequest(http.MethodGet,
+		fmt.Sprintf("/api/groups/%d/credentials/%d/state-refresh", groupID, credentialID), nil)
+	request.Header.Set("Authorization", "Bearer test-auth-key")
+	response := httptest.NewRecorder()
+	engine.ServeHTTP(response, request)
+	if response.Code != http.StatusOK {
+		t.Fatalf("state read = %d %s", response.Code, response.Body)
+	}
+	var envelope struct {
+		Data CredentialStateResponse `json:"data"`
+	}
+	if err := json.Unmarshal(response.Body.Bytes(), &envelope); err != nil {
+		t.Fatal(err)
+	}
+	if envelope.Data.TurnState != complete || envelope.Data.TurnStateLength != execution.CodexTurnStateLength ||
+		envelope.Data.RefreshedAtMS == nil || *envelope.Data.RefreshedAtMS != now.UnixMilli() ||
+		len(envelope.Data.Logs) != 1 {
+		t.Fatalf("state read payload = %#v", envelope.Data)
+	}
+}

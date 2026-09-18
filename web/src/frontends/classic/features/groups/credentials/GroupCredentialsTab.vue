@@ -23,6 +23,7 @@ import type {
   CredentialCollectionFilters,
   CredentialItemDto,
   CredentialObservationDto,
+  CredentialStateDto,
   CredentialTestResultDto,
   ProxyMutation,
   CredentialStatus,
@@ -38,6 +39,7 @@ import {
   downloadAllCredentials,
   downloadCredential,
   getCredentialDetail,
+  getCredentialState,
   revealCredential,
   refreshCredential as refreshCredentialRequest,
   restoreCredential,
@@ -74,6 +76,7 @@ import QueryFeedback from '@/components/ui/QueryFeedback.vue'
 import SkeletonSurface from '@/components/ui/SkeletonSurface.vue'
 import SubscriptionCredentialStager from '@/features/import/SubscriptionCredentialStager.vue'
 import { presentSubscriptionErrorKey } from '@/features/subscription-error-presenter'
+import { formatLocalInstant } from '@/lib/format'
 import { createUUID } from '@/lib/uuid'
 
 import CredentialBatchBar from './GroupCredentialBatchBar.vue'
@@ -102,7 +105,7 @@ const client = useApiClient()
 const queryClient = useQueryClient()
 const route = useRoute()
 const router = useRouter()
-const { n, t } = useI18n()
+const { locale, n, t } = useI18n()
 const toast = useToast()
 const filters = computed(() => parseCredentialRouteQuery(route.query))
 const routeState = computed(() => parseCredentialRouteState(route.query))
@@ -132,6 +135,9 @@ const selectedIds = ref(new Set<number>())
 const pendingOperations = ref(new Set<string>())
 const loadedDetails = ref(new Map<number, CredentialItemDto>())
 const detailErrors = ref(new Map<number, string>())
+const credentialStates = ref(new Map<number, CredentialStateDto>())
+const stateErrors = ref(new Map<number, string>())
+const stateLoadingIDs = ref(new Set<number>())
 const observationErrors = ref(new Map<number, string>())
 const batchObservationPending = ref(new Set<number>())
 const feedback = ref('')
@@ -344,6 +350,9 @@ watch(
     connectionStages.value = []
     loadedDetails.value = new Map()
     detailErrors.value = new Map()
+    credentialStates.value = new Map()
+    stateErrors.value = new Map()
+    stateLoadingIDs.value = new Set()
     observationErrors.value = new Map()
     batchObservationPending.value = new Set()
   },
@@ -531,6 +540,50 @@ function clearDetailState(id: number): void {
   const errors = new Map(detailErrors.value)
   errors.delete(id)
   detailErrors.value = errors
+  clearCredentialState(id)
+}
+// 凭据数据变化后已保留的 State 可能过期，丢弃记录以便下次展开重新读取。
+function clearCredentialState(id: number): void {
+  const states = new Map(credentialStates.value)
+  states.delete(id)
+  credentialStates.value = states
+  const errors = new Map(stateErrors.value)
+  errors.delete(id)
+  stateErrors.value = errors
+}
+function credentialState(id: number): CredentialStateDto | undefined {
+  return credentialStates.value.get(id)
+}
+function stateLoading(id: number): boolean {
+  return stateLoadingIDs.value.has(id)
+}
+function stateError(id: number): string {
+  return stateErrors.value.get(id) ?? ''
+}
+// State 记录只在展开详情时读取；刷新后强制重读以显示本次结果。
+async function loadCredentialState(item: CredentialItemDto, force = false): Promise<void> {
+  const id = item.credential_id
+  if (!force && (stateLoadingIDs.value.has(id) || credentialStates.value.has(id))) return
+  const errors = new Map(stateErrors.value)
+  errors.delete(id)
+  stateErrors.value = errors
+  const loading = new Set(stateLoadingIDs.value)
+  loading.add(id)
+  stateLoadingIDs.value = loading
+  try {
+    const state = await getCredentialState(client, props.groupId, id)
+    const next = new Map(credentialStates.value)
+    next.set(id, state)
+    credentialStates.value = next
+  } catch {
+    const nextErrors = new Map(stateErrors.value)
+    nextErrors.set(id, t('group.credentials.subscription.state.loadFailed'))
+    stateErrors.value = nextErrors
+  } finally {
+    const done = new Set(stateLoadingIDs.value)
+    done.delete(id)
+    stateLoadingIDs.value = done
+  }
 }
 async function resolveCopyValue(id: number): Promise<string> {
   const controller = copyControllers.create()
@@ -753,6 +806,7 @@ async function refreshState(item: CredentialItemDto): Promise<void> {
     toast.show({
       message: t('group.credentials.subscription.refreshStateSucceeded', {
         state: truncateTurnState(result.turn_state),
+        time: formatLocalInstant(result.refreshed_at_ms, locale.value),
       }),
       tone: 'success',
     })
@@ -765,6 +819,8 @@ async function refreshState(item: CredentialItemDto): Promise<void> {
     })
   } finally {
     setPending(item.credential_id, 'state-refresh', false)
+    // 成功与失败都会新增一条刷新记录，重读以显示本次结果。
+    await loadCredentialState(item, true)
   }
 }
 
@@ -1860,6 +1916,10 @@ async function runBatch(
               :detail-busy="detailBusy(item.credential_id)"
               :detail-loaded="detailLoaded(item.credential_id)"
               :detail-error="detailError(item.credential_id)"
+              :state="credentialState(item.credential_id)"
+              :state-busy="pendingOperations.has(operation(item.credential_id, 'state-refresh'))"
+              :state-loading="stateLoading(item.credential_id)"
+              :state-error="stateError(item.credential_id)"
               :observation-error="observationError(item.credential_id)"
               :channel-icon="channelDescriptor?.icon"
               :channel-mark="channelDescriptor?.mark"
@@ -1875,6 +1935,7 @@ async function runBatch(
               @download="downloadCredentialFile"
               @refresh-credential="refreshCredentialToken"
               @refresh-state="refreshState"
+              @load-state="loadCredentialState"
               @remove="
                 deleteTarget = {
                   ids: [$event.credential_id],

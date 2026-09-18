@@ -34,7 +34,6 @@ import {
   exportCredential,
   exportAllCredentials,
   refreshCredentialQuota,
-  refreshCredentialState,
   resetCredentialQuota,
   revealCredential,
   runCredentialAction,
@@ -611,10 +610,6 @@ function saved(row: CredentialRow): void {
   void changed()
   void cache.invalidateQueries({ queryKey: credentialDetailKey(props.group.id, row.id) })
 }
-// turn state 是不定长的不透明标识，成功反馈只展示开头一段。
-function truncateTurnState(value: string): string {
-  return value.length > 16 ? value.slice(0, 16) + '…' : value
-}
 async function action(row: CredentialRow, value: string): Promise<void> {
   if (busy.value || syncPending(row.id)) return
   if (value === 'quota') {
@@ -626,27 +621,6 @@ async function action(row: CredentialRow, value: string): Promise<void> {
     } catch {
       if (!controller.signal.aborted)
         cardErrors.value.set(row.id, t('credentialCards.actionFailed'))
-    }
-    return
-  }
-  if (value === 'state') {
-    if (!props.channel?.stateRefresh) return
-    if (!accountBatchPending.value) accountBatch.value = undefined
-    mutating.value = row.id
-    pendingAction.value = 'state'
-    cardErrors.value.delete(row.id)
-    try {
-      const result = await refreshCredentialState(client, props.group.id, row.id, controller.signal)
-      if (controller.signal.aborted) return
-      // 刷新只改变该账号的 turn state，成功反馈就地展示，不重新拉取凭据列表。
-      notice.value = t('credentialCards.stateRefreshed', {
-        state: truncateTurnState(result.turn_state),
-      })
-    } catch {
-      if (!controller.signal.aborted)
-        cardErrors.value.set(row.id, t('credentialCards.actionFailed'))
-    } finally {
-      mutating.value = undefined
     }
     return
   }
@@ -989,7 +963,6 @@ defineExpose({ refresh })
           <APIKeyCredentialCard
             v-else
             :row="row"
-            :channel="channel"
             :selected="selected.has(row.id)"
             :pending="mutating === row.id"
             :disabled="busy"

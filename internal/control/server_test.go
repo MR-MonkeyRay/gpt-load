@@ -107,6 +107,7 @@ func TestGroupCollectionHTTPRoutesDeclareStaticOptionsBeforeDynamicDetail(t *tes
 		{name: "control.group-credentials.list", path: "/groups/:group_id/credentials"},
 		{name: "control.group-credentials.detail", path: "/groups/:group_id/credentials/:credential_id"},
 		{name: "control.group-credentials.quota-history", path: "/groups/:group_id/credentials/:credential_id/quota-history"},
+		{name: "control.group-credentials.state", path: "/groups/:group_id/credentials/:credential_id/state-refresh"},
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("GET group routes = %#v, want %#v", got, want)

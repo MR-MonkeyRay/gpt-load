@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"reflect"
 	"testing"
@@ -108,10 +109,38 @@ func TestCredentialRoundTripKeepsCPACompatibleSchema(t *testing.T) {
 }
 
 func TestNormalizeUpstreamErrorPreservesObservationStatus(t *testing.T) {
-	err := normalizeUpstreamError(&cpaembedded.UpstreamHTTPError{Operation: "usage", StatusCode: 401})
+	err := normalizeUpstreamError("account observation", &cpaembedded.UpstreamHTTPError{Operation: "usage", StatusCode: 401})
 	var upstream *UpstreamHTTPError
 	if !errors.As(err, &upstream) || upstream.StatusCode != 401 || upstream.Operation != "usage" {
 		t.Fatalf("normalized error = %#v / %v", upstream, err)
+	}
+}
+
+// statusCarrierError mirrors the unexported streaming bridge failure that
+// reports a provider status without exposing the response body.
+type statusCarrierError struct {
+	status int
+}
+
+func (err statusCarrierError) Error() string   { return fmt.Sprintf("status %d", err.status) }
+func (err statusCarrierError) StatusCode() int { return err.status }
+
+func TestNormalizeUpstreamErrorClassifiesStreamingStatus(t *testing.T) {
+	err := normalizeUpstreamError("state probe", statusCarrierError{status: http.StatusUnauthorized})
+	var upstream *UpstreamHTTPError
+	if !errors.As(err, &upstream) || upstream.StatusCode != http.StatusUnauthorized ||
+		upstream.Operation != "state probe" {
+		t.Fatalf("normalized streaming error = %#v / %v", upstream, err)
+	}
+	for _, passthrough := range []error{
+		context.Canceled,
+		context.DeadlineExceeded,
+		errors.New("bridge failure without a status"),
+		statusCarrierError{status: 0},
+	} {
+		if normalized := normalizeUpstreamError("state probe", passthrough); normalized != passthrough {
+			t.Fatalf("normalized %v = %v, want unchanged", passthrough, normalized)
+		}
 	}
 }
 

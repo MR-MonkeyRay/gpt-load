@@ -196,7 +196,6 @@ useLoadingActivity(() => Boolean(props.pending))
         <CredentialCardActions
           :row="row"
           subscription
-          :channel="channel"
           :disabled="disabled"
           @action="$emit('action', $event)"
         />

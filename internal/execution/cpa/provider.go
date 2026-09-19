@@ -164,6 +164,8 @@ type providerResponse struct {
 	Local                  bool
 	QuotaObservedAt        time.Time
 	QuotaWindows           []providerobservation.QuotaWindow
+	// TurnState 是上游在这次响应里自己返回的 turn state 原始值；为空表示没有。
+	TurnState string
 }
 
 type providerStreamResponse struct {
@@ -173,6 +175,8 @@ type providerStreamResponse struct {
 	UpstreamProtocol       protocol.Protocol
 	QuotaObservedAt        time.Time
 	QuotaWindows           []providerobservation.QuotaWindow
+	// TurnState 是上游在响应头里自己返回的 turn state 原始值；为空表示没有。
+	TurnState string
 }
 
 type providerStreamChunk struct {

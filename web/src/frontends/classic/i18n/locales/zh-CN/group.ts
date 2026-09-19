@@ -565,6 +565,7 @@ export default {
           loading: '正在读取 State 记录',
           loadFailed: 'State 记录加载失败',
           status: { succeeded: '成功', failed: '失败' },
+          source: { refresh: '手动刷新', natural: '自然捕获' },
           attempts: '第 {count} 次尝试',
           stateLength: '长度 {length}',
           model: '模型',
@@ -578,8 +579,6 @@ export default {
           result: '失败原因',
           httpStatus: 'HTTP 状态',
           captured: '捕获的 State',
-          showRequest: '显示请求详情',
-          hideRequest: '隐藏请求详情',
           request: '请求详情',
           failure: {
             unauthorized: '凭据需要重新授权',

@@ -232,7 +232,11 @@ func BuildContainer() (*dig.Container, error) {
 		engine *gin.Engine,
 		registry *httproute.Registry,
 		gatewayHandler *gateway.Handler,
+		adapter *cpaexecutor.Adapter,
+		service *control.Service,
 	) error {
+		// 数据面只观察上游自己返回的 turn state，保留与重放都由控制面负责。
+		adapter.SetTurnStateObserver(service)
 		engine.Use(gatewayHandler.DownstreamHeadersMiddleware())
 		return registry.Bind(engine)
 	}); err != nil {

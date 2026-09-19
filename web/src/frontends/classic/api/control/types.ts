@@ -252,14 +252,19 @@ export interface CredentialObservationDto {
   last_error_code?: string
 }
 
-/** 一次手动 State 刷新的持久记录，成功与失败都保留。 */
+/** 一次 State 记录的持久来源：手动刷新探测，或数据面请求的自然捕获。 */
+export type CredentialStateRecordSource = 'refresh' | 'natural'
+
+/** 一次 State 刷新的持久记录，成功与失败都保留。 */
 export interface CredentialStateRecordDto {
   id: number
   status: 'succeeded' | 'failed'
+  /** 记录的来源；自然捕获没有探测请求，其请求字段（序号、输入、耗时、HTTP 状态）不具意义。 */
+  source: CredentialStateRecordSource
   error_code?: string
   turn_state: string
   state_length: number
-  /** 该次探测在其所属刷新运行中的序号，从 1 开始，不是运行内的尝试次数。 */
+  /** 该次探测在其所属刷新运行中的序号，从 1 开始，不是运行内的尝试次数；自然捕获没有探测，恒为 0。 */
   attempts: number
   http_status?: number
   model: string

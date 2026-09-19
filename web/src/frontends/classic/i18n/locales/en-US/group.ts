@@ -585,6 +585,7 @@ export default {
           loading: 'Loading state records',
           loadFailed: 'Unable to load state records',
           status: { succeeded: 'Succeeded', failed: 'Failed' },
+          source: { refresh: 'Manual refresh', natural: 'Natural capture' },
           attempts: 'Attempt {count}',
           stateLength: 'Length {length}',
           model: 'Model',
@@ -598,8 +599,6 @@ export default {
           result: 'Failure',
           httpStatus: 'HTTP status',
           captured: 'Captured state',
-          showRequest: 'Show request details',
-          hideRequest: 'Hide request details',
           request: 'Request details',
           failure: {
             unauthorized: 'Credential needs reauthorization',

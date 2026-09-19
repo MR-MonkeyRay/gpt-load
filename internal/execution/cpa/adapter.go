@@ -44,6 +44,9 @@ type Adapter struct {
 	credentials credentialPreparer
 	channels    *channel.Registry
 	providers   map[channel.ProviderKind]providerBridge
+	// turnStates 接收上游在真实请求里自己返回的完整 turn state；没有观察者时
+	// 适配器不做任何捕获。
+	turnStates execution.TurnStateObserver
 }
 
 type credentialPreparer interface {
@@ -83,6 +86,46 @@ func NewAdapter(credentials *subscription.CredentialManager, channels *channel.R
 			newGrokProviderBridge(),
 		),
 	}
+}
+
+// SetTurnStateObserver binds the sink that retains turn states observed on real
+// attempts. The adapter is constructed before the control plane, so the binding
+// is applied during wiring and never changes afterwards.
+func (a *Adapter) SetTurnStateObserver(observer execution.TurnStateObserver) {
+	if a == nil {
+		return
+	}
+	a.turnStates = observer
+}
+
+// recordObservedTurnState reports a complete turn state the upstream returned on
+// a real attempt. A replayed state stays authoritative for its whole lifetime,
+// so only an attempt that carried no state can produce a new capture; an
+// incomplete or empty header is never a capture.
+func (a *Adapter) recordObservedTurnState(
+	spec execution.AttemptSpec,
+	baseURL string,
+	proxySettings cpaProxySettings,
+	turnState string,
+	observedAt time.Time,
+) {
+	if a == nil || a.turnStates == nil || spec.TurnStateReplayed {
+		return
+	}
+	value, complete := execution.CompleteTurnState(turnState)
+	model := execution.TurnStateModel(spec.UpstreamModel, spec.ClientModel)
+	if !complete || model == "" || spec.Credential.ID == 0 || spec.Credential.IdentityGeneration == 0 {
+		return
+	}
+	a.turnStates.ObserveTurnState(execution.TurnStateObservation{
+		CredentialID:       spec.Credential.ID,
+		IdentityGeneration: spec.Credential.IdentityGeneration,
+		Model:              model,
+		TurnState:          value,
+		ProxyURL:           proxySettings.URL,
+		BaseURL:            baseURL,
+		ObservedAtMS:       observedAt.UnixMilli(),
+	})
 }
 
 // ValidateRouteCapability delegates the implementation bound to ProviderKind.
@@ -238,6 +281,7 @@ func (a *Adapter) Execute(ctx context.Context, spec execution.AttemptSpec) (resu
 		result.AppliedReasoning = appliedReasoning(response.AppliedReasoningEffort)
 		return result
 	}
+	a.recordObservedTurnState(spec, baseURL, proxySettings, response.TurnState, time.Now())
 	return unaryProviderSuccess(provider, spec, response)
 }
 
@@ -372,6 +416,7 @@ func (a *Adapter) ExecuteStream(
 		}
 	}
 	applied := appliedReasoning(response.AppliedReasoningEffort)
+	a.recordObservedTurnState(spec, baseURL, proxySettings, response.TurnState, time.Now())
 	headers := subscriptionResponseHeaders(response.Headers, "text/event-stream")
 	sequence := uint64(1)
 	ready := false

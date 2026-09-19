@@ -186,8 +186,6 @@ onScopeDispose(() => {
 const stateRunning = computed(() => stateQuery.data.value?.running ?? false)
 const statePending = ref(false)
 const stateFeedback = ref('')
-// 记录详情里的请求块默认隐藏，按记录 id 记住展开状态。
-const stateRequestDetails = ref(new Set<number>())
 const stateController = new AbortController()
 function stateProxyLabel(value: string): string {
   if (value === 'direct') return t('credentialCards.state.proxyDirect')
@@ -219,13 +217,6 @@ function stateRemaining(expiresAt: number | null): string {
       : []),
     t('credentialCards.state.remainingSecond', { value: n(seconds) }),
   ].join('')
-}
-function stateRequestShown(id: number): boolean {
-  return stateRequestDetails.value.has(id)
-}
-function toggleStateRequest(id: number): void {
-  if (stateRequestDetails.value.has(id)) stateRequestDetails.value.delete(id)
-  else stateRequestDetails.value.add(id)
 }
 async function toggleStateRefresh(): Promise<void> {
   const model = selectedModel.value
@@ -512,8 +503,11 @@ useMessageSource(() =>
                 <AppBadge :tone="log.status === 'succeeded' ? 'success' : 'danger'" size="xs" dot>{{
                   t(`credentialCards.state.status.${log.status}`)
                 }}</AppBadge>
+                <AppBadge variant="plain" size="xs">{{
+                  t(`credentialCards.state.source.${log.source}`)
+                }}</AppBadge>
                 <span>{{ credentialTime(log.createdAt, locale) }}</span>
-                <span>{{
+                <span v-if="log.source === 'refresh'">{{
                   t('credentialCards.state.attemptOrdinal', { count: n(log.attempts) })
                 }}</span>
                 <span>{{
@@ -529,16 +523,7 @@ useMessageSource(() =>
                     </dd>
                   </div>
                 </dl>
-                <AppButton variant="text" size="xxs" @click="toggleStateRequest(log.id)">
-                  {{
-                    t(
-                      stateRequestShown(log.id)
-                        ? 'credentialCards.state.hideRequest'
-                        : 'credentialCards.state.showRequest',
-                    )
-                  }}
-                </AppButton>
-                <div v-if="stateRequestShown(log.id)" class="modern-state-record-request">
+                <div class="modern-state-record-request">
                   <span class="modern-state-history-title">{{
                     t('credentialCards.state.request')
                   }}</span>
@@ -547,7 +532,7 @@ useMessageSource(() =>
                       <dt>{{ t('credentialCards.state.model') }}</dt>
                       <dd>{{ log.model }}</dd>
                     </div>
-                    <div>
+                    <div v-if="log.source === 'refresh'">
                       <dt>{{ t('credentialCards.state.input') }}</dt>
                       <dd>{{ log.input }}</dd>
                     </div>
@@ -559,7 +544,7 @@ useMessageSource(() =>
                       <dt>{{ t('credentialCards.state.baseURL') }}</dt>
                       <dd>{{ log.baseUrl || t('credentialCards.state.baseURLDefault') }}</dd>
                     </div>
-                    <div>
+                    <div v-if="log.source === 'refresh'">
                       <dt>{{ t('credentialCards.state.duration') }}</dt>
                       <dd>{{ n(log.durationMs) }} ms</dd>
                     </div>
@@ -567,7 +552,7 @@ useMessageSource(() =>
                       <dt>{{ t('credentialCards.state.result') }}</dt>
                       <dd>{{ stateFailureLabel(log.errorCode) }}</dd>
                     </div>
-                    <div v-if="log.httpStatus !== null">
+                    <div v-if="log.source === 'refresh' && log.httpStatus !== null">
                       <dt>{{ t('credentialCards.state.httpStatus') }}</dt>
                       <dd>{{ log.httpStatus }}</dd>
                     </div>

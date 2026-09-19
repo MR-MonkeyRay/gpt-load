@@ -76,7 +76,12 @@ func (a *Adapter) OpenWebsocket(ctx context.Context, spec execution.AttemptSpec)
 		return reject()
 	}
 	observationSpec := execution.AttemptSpec{Credential: execution.NewCredentialSnapshot(spec.Credential.ID, spec.Credential.Version, spec.Credential.IdentityGeneration, nil)}
-	observed := &observedWebsocketSession{adapter: a, spec: observationSpec}
+	// 观察用的 spec 不带请求头，turn state 只依赖凭据、模型和是否回放过。
+	turnStateSpec := observationSpec
+	turnStateSpec.ClientModel = spec.ClientModel
+	turnStateSpec.UpstreamModel = spec.UpstreamModel
+	turnStateSpec.TurnStateReplayed = spec.TurnStateReplayed
+	observed := &observedWebsocketSession{adapter: a, spec: observationSpec, turnStateSpec: turnStateSpec, baseURL: baseURL, proxyURL: settings.URL}
 	s, err := opener.openWebsocket(spec, credential, baseURL, settings.URL, observed.observeHeaders)
 	if err != nil {
 		result.Error = codexWebsocketEvidence(ctx, err)
@@ -88,30 +93,70 @@ func (a *Adapter) OpenWebsocket(ctx context.Context, spec execution.AttemptSpec)
 
 type observedWebsocketSession struct {
 	execution.WebsocketSession
-	adapter   *Adapter
-	spec      execution.AttemptSpec
-	handshake subscription.PassiveQuotaSample
+	adapter *Adapter
+	spec    execution.AttemptSpec
+	// turnStateSpec 只携带 turn state 捕获需要的凭据、模型与回放标记。
+	turnStateSpec execution.AttemptSpec
+	baseURL       string
+	proxyURL      string
+	handshake     subscription.PassiveQuotaSample
 }
 
 func (s *observedWebsocketSession) ExecuteTurn(ctx context.Context, payload []byte, emit func(context.Context, []byte) error) execution.WebsocketResult {
-	return s.WebsocketSession.ExecuteTurn(ctx, payload, func(ctx context.Context, event []byte) error {
+	result := s.WebsocketSession.ExecuteTurn(ctx, payload, func(ctx context.Context, event []byte) error {
 		observedAt := time.Now()
 		windows := codex.NormalizeWebsocketQuotaWindows(event, observedAt)
 		if len(windows) > 0 {
 			s.adapter.credentials.RecordPassiveQuotaPair(s.spec.Credential.ID, s.spec.Credential.IdentityGeneration,
 				s.handshake, subscription.PassiveQuotaSample{ObservedAtMS: observedAt.UnixMilli(), Windows: windows})
 		}
+		// WS 上游用元数据事件投递 turn state，握手响应头不保证携带。
+		if state := codex.WebsocketTurnState(event); state != "" {
+			s.adapter.recordObservedTurnState(
+				s.turnStateSpec, s.baseURL,
+				cpaProxySettings{URL: s.proxyURL},
+				state, observedAt,
+			)
+		}
 		if emit != nil {
 			return emit(ctx, event)
 		}
 		return nil
 	})
+	// 握手与失败响应头同样由 ObserveHeaders 报告，这里只兜住携带 state 的终态响应头。
+	if s.adapter != nil {
+		s.adapter.recordObservedTurnState(
+			s.turnStateSpec, s.baseURL,
+			cpaProxySettings{URL: s.proxyURL},
+			result.Header.Get(execution.CodexTurnStateHeader),
+			headerObservationTime(result),
+		)
+	}
+	return result
+}
+
+// headerObservationTime prefers the upstream's own observation instant so a
+// capture keeps the upstream clock, falling back to now when it is absent.
+func headerObservationTime(result execution.WebsocketResult) time.Time {
+	if !result.HeaderObservedAt.IsZero() {
+		return result.HeaderObservedAt
+	}
+	return time.Now()
 }
 
 // observeHeaders 保留响应头的原始额度样本；握手在交付本连接的事件之前记录。
 func (s *observedWebsocketSession) observeHeaders(headers http.Header, observedAt time.Time) {
 	if len(headers) == 0 || observedAt.IsZero() {
 		return
+	}
+	// 握手响应头可能直接带着 state，先于任何事件交付。
+	if s.adapter != nil {
+		s.adapter.recordObservedTurnState(
+			s.turnStateSpec, s.baseURL,
+			cpaProxySettings{URL: s.proxyURL},
+			headers.Get(execution.CodexTurnStateHeader),
+			observedAt,
+		)
 	}
 	signals := make(map[string]string, len(headers))
 	for name, values := range headers {

@@ -45,8 +45,8 @@ func TestTurnStateInjectionFollowsTheResolvedModel(t *testing.T) {
 		{upstream: "", external: "gpt-6-astra", want: "gpt-6-astra"},
 		{upstream: "", external: "", want: ""},
 	} {
-		if got := TurnStateModel(test.upstream, test.external); got != test.want {
-			t.Fatalf("TurnStateModel(%q, %q) = %q, want %q", test.upstream, test.external, got, test.want)
+		if got := execution.TurnStateModel(test.upstream, test.external); got != test.want {
+			t.Fatalf("execution.TurnStateModel(%q, %q) = %q, want %q", test.upstream, test.external, got, test.want)
 		}
 	}
 
@@ -60,6 +60,10 @@ func TestTurnStateInjectionFollowsTheResolvedModel(t *testing.T) {
 	if got := spec.Header.Get(execution.CodexTurnStateHeader); got != "state-value" {
 		t.Fatalf("injected header = %q, want state-value", got)
 	}
+	// 回放过的尝试不能再把上游返回的 state 当成新捕获。
+	if !spec.TurnStateReplayed {
+		t.Fatal("replayed turn state was not reported to the execution layer")
+	}
 
 	// 没有解析出捕获值的请求绝不注入。
 	empty := base()
@@ -70,6 +74,9 @@ func TestTurnStateInjectionFollowsTheResolvedModel(t *testing.T) {
 	}
 	if got := spec.Header.Get(execution.CodexTurnStateHeader); got != "" {
 		t.Fatalf("empty state injected: %q", got)
+	}
+	if spec.TurnStateReplayed {
+		t.Fatal("attempt without a captured state reported a replay")
 	}
 
 	if strings.TrimSpace(execution.CodexTurnStateModel) != "gpt-6-astra" || execution.CodexTurnStateLength != 292 {

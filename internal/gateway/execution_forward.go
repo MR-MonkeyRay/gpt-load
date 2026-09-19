@@ -740,14 +740,6 @@ func executionRepresentationFailure(result UpstreamResult, err error) UpstreamRe
 	}
 }
 
-// TurnStateModel returns the upstream model a captured turn state must match.
-func TurnStateModel(upstreamModel, externalModel string) string {
-	if upstreamModel != "" {
-		return upstreamModel
-	}
-	return externalModel
-}
-
 func newExecutionAttemptSpec(input ForwardInput) (execution.AttemptSpec, error) {
 	if input.Request == nil {
 		return execution.AttemptSpec{}, fmt.Errorf("request is required")
@@ -787,6 +779,7 @@ func newExecutionAttemptSpec(input ForwardInput) (execution.AttemptSpec, error) 
 		IncludeUsage:             input.ObserveUsage,
 		ForceCredentialRefresh:   input.ForceCredentialRefresh,
 		ContinuityKey:            input.ContinuityKey,
+		TurnStateReplayed:        input.CredentialTurnState != "",
 		TargetConfig:             input.TargetConfig,
 		Timeouts: execution.AttemptTimeouts{
 			FirstByte:  input.Group.Timeouts.FirstByte,

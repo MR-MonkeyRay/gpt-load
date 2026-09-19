@@ -334,7 +334,7 @@ func (s *websocketConnection) executeTurn(turn websocketTurn) {
 		input := ForwardInput{Dialect: dialect.NewOpenAIResponses(), ObserveUsage: effective.metadata.ObserveUsage, Group: selection.Group, APIKey: credential.apiKey, CredentialSecrets: credential.secrets, Request: parsed, ExternalModel: model, UpstreamModelID: optionalModelValue(selection.UpstreamModelID), RequestID: id, AttemptID: id + ":" + strconv.Itoa(sequence), AttemptSequence: uint32(sequence), ClientProtocol: protocol.OpenAIResponses, Operation: execution.OperationResponsesCreate, RouteRequirement: execution.RouteRequirementNative, ResponsesStorePreference: original.metadata.ResponsesStorePreference, ChannelID: string(selection.ChannelID), RouteMode: execution.RouteNative, TargetConfig: selection.ResolvedTarget.TargetConfig, Credential: execution.NewCredentialSnapshot(ref.ID, ref.Version, ref.IdentityGeneration, credential.payload), Proxy: proxy, ProxyFingerprint: fingerprint}
 		input.ForceCredentialRefresh = forceCredentialRefresh
 		input.CredentialTurnState = ref.TurnStateFor(
-			TurnStateModel(optionalModelValue(selection.UpstreamModelID), model),
+			execution.TurnStateModel(optionalModelValue(selection.UpstreamModelID), model),
 			h.now(),
 		)
 		spec, err := newExecutionAttemptSpec(input)

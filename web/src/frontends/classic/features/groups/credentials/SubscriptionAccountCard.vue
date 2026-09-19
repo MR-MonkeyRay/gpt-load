@@ -282,24 +282,7 @@ const stateActionLabel = computed(() =>
 const stateActionDisabled = computed(
   () => props.busy || (stateModels.value.length === 0 && !stateRunning.value),
 )
-// 记录展开后先直接给出捕获的 State 值，请求详情默认折叠，逐条按需展开。
-const requestDetailIDs = ref(new Set<number>())
-function toggleRequestDetail(id: number): void {
-  const next = new Set(requestDetailIDs.value)
-  if (next.has(id)) next.delete(id)
-  else next.add(id)
-  requestDetailIDs.value = next
-}
-// 后端会裁掉旧记录，收起已消失记录的展开态，避免集合无界增长。
-watch(
-  () => props.state?.logs,
-  (logs) => {
-    if (requestDetailIDs.value.size === 0) return
-    const kept = new Set((logs ?? []).map((record) => record.id))
-    const next = new Set([...requestDetailIDs.value].filter((id) => kept.has(id)))
-    if (next.size !== requestDetailIDs.value.size) requestDetailIDs.value = next
-  },
-)
+// 记录展开后直接给出捕获的 State 值与这次请求的详情，不再额外折叠。
 const snapshot = computed(() => observation.value?.snapshot)
 function isAccountWideQuotaWindow(window: CredentialQuotaWindowDto): boolean {
   return window.scope === 'account'
@@ -1620,13 +1603,19 @@ function runMenuAction(
                 >
                   {{ t(`group.credentials.subscription.state.status.${record.status}`) }}
                 </StatusBadge>
+                <StatusBadge
+                  :tone="record.source === 'natural' ? 'info' : 'neutral'"
+                  size="compact"
+                >
+                  {{ t(`group.credentials.subscription.state.source.${record.source}`) }}
+                </StatusBadge>
                 <AppRelativeTime
                   :instant="record.created_at_ms"
                   :locale="locale"
                   :empty-label="t('group.credentials.subscription.unknown')"
                   hint
                 />
-                <span>
+                <span v-if="record.source === 'refresh'">
                   {{
                     t('group.credentials.subscription.state.attempts', {
                       count: n(record.attempts),
@@ -1653,17 +1642,7 @@ function runMenuAction(
                     {{ t('group.credentials.subscription.state.empty') }}
                   </span>
                 </div>
-                <AppButton variant="ghost" size="compact" @click="toggleRequestDetail(record.id)">
-                  {{
-                    requestDetailIDs.has(record.id)
-                      ? t('group.credentials.subscription.state.hideRequest')
-                      : t('group.credentials.subscription.state.showRequest')
-                  }}
-                </AppButton>
-                <div
-                  v-if="requestDetailIDs.has(record.id)"
-                  class="subscription-account__state-record-request"
-                >
+                <div class="subscription-account__state-record-request">
                   <span class="subscription-account__state-record-label">
                     {{ t('group.credentials.subscription.state.request') }}
                   </span>
@@ -1672,7 +1651,7 @@ function runMenuAction(
                       <dt>{{ t('group.credentials.subscription.state.model') }}</dt>
                       <dd>{{ record.model }}</dd>
                     </div>
-                    <div>
+                    <div v-if="record.source === 'refresh'">
                       <dt>{{ t('group.credentials.subscription.state.input') }}</dt>
                       <dd>{{ record.input }}</dd>
                     </div>
@@ -1689,7 +1668,7 @@ function runMenuAction(
                         }}
                       </dd>
                     </div>
-                    <div>
+                    <div v-if="record.source === 'refresh'">
                       <dt>{{ t('group.credentials.subscription.state.duration') }}</dt>
                       <dd>{{ n(record.duration_ms) }} ms</dd>
                     </div>
@@ -1697,7 +1676,7 @@ function runMenuAction(
                       <dt>{{ t('group.credentials.subscription.state.result') }}</dt>
                       <dd>{{ stateFailureLabel(record.error_code ?? '') }}</dd>
                     </div>
-                    <div v-if="record.http_status !== undefined">
+                    <div v-if="record.source === 'refresh' && record.http_status !== undefined">
                       <dt>{{ t('group.credentials.subscription.state.httpStatus') }}</dt>
                       <dd>{{ record.http_status }}</dd>
                     </div>

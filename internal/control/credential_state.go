@@ -42,7 +42,14 @@ const (
 	stateRefreshStopTimeout = 5 * time.Second
 	// stateRefreshLogLimit 是详情一次回看的刷新记录条数。
 	stateRefreshLogLimit = 10
+	// stateRefreshClockSkew 是接受上游观测时刻的上限偏移：观测时刻决定 1 小时有效期
+	// 的起点，超前的时刻只会把有效期拉长。
+	stateRefreshClockSkew = time.Minute
 )
+
+// errNaturalStateCaptureStale reports a live capture whose credential was
+// replaced before the durable write. The capture is dropped, not retried.
+var errNaturalStateCaptureStale = errors.New("turn state capture belongs to a retired credential identity")
 
 // state refresh failure classifications recorded in the durable refresh log.
 const (
@@ -60,17 +67,21 @@ type CredentialStateRefreshRequest struct {
 	Model string `json:"model"`
 }
 
-// CredentialStateRefreshLogResponse is one durable refresh record: one probe
-// request and its result. A successful record carries the captured state and
-// the probe request that produced it; a failed record carries the failure
-// classification and the observed length.
+// CredentialStateRefreshLogResponse is one durable capture record: one request
+// and its result. A successful record carries the captured state and the request
+// that produced it; a failed record carries the failure classification and the
+// observed length. Source tells a manual refresh probe apart from a state the
+// upstream returned on a real attempt.
 type CredentialStateRefreshLogResponse struct {
 	ID          uint   `json:"id"`
 	Status      string `json:"status"`
 	ErrorCode   string `json:"error_code,omitempty"`
 	TurnState   string `json:"turn_state"`
 	StateLength int    `json:"state_length"`
-	// Attempts 是这次探测在其刷新运行中的序号，从 1 开始。
+	// Source 是这次捕获的来源：refresh 为手动刷新探测，natural 为实时请求捕获。
+	Source string `json:"source"`
+	// Attempts 是这次探测在其刷新运行中的序号，从 1 开始；实时捕获不属于任何刷新
+	// 运行，序号为 0。
 	Attempts    int    `json:"attempts"`
 	HTTPStatus  *int   `json:"http_status,omitempty"`
 	Model       string `json:"model"`
@@ -305,6 +316,16 @@ func (s *Service) stopStateRefreshes() {
 			return
 		}
 	}
+	// 实时捕获的落库也是运行期工作：存储关闭前同样要收敛。
+	natural := make(chan struct{})
+	go func() {
+		s.naturalWrites.Wait()
+		close(natural)
+	}()
+	select {
+	case <-natural:
+	case <-deadline.C:
+	}
 }
 
 // cancelStateRefreshRuns cancels the matching runs and returns them for the
@@ -349,6 +370,153 @@ func (s *Service) stateRefreshRunningModels(credentialID uint) map[string]bool {
 		}
 	}
 	return running
+}
+
+// ObserveTurnState retains a complete turn state an upstream returned on a real
+// attempt, so every request of that credential and model reuses it for the next
+// hour. It runs on the data path: it reads the registry only and hands the
+// durable write to a background task. A state captured by a manual refresh stays
+// authoritative for its whole lifetime, so an observation is dropped while a run
+// is in flight or while a valid state already exists.
+func (s *Service) ObserveTurnState(observation execution.TurnStateObservation) {
+	if s == nil {
+		return
+	}
+	observation.Model = strings.TrimSpace(observation.Model)
+	observation.TurnState = strings.TrimSpace(observation.TurnState)
+	observation.ProxyURL = strings.TrimSpace(observation.ProxyURL)
+	observation.BaseURL = strings.TrimSpace(observation.BaseURL)
+	if observation.CredentialID == 0 || observation.IdentityGeneration == 0 ||
+		observation.Model == "" || len(observation.TurnState) != execution.CodexTurnStateLength {
+		return
+	}
+	key := stateRefreshKey{credentialID: observation.CredentialID, model: observation.Model}
+	if s.stateRefreshRunning(key) {
+		return
+	}
+	ref, ok := s.registry.CredentialRef(observation.CredentialID)
+	if !ok || ref.IdentityGeneration != observation.IdentityGeneration {
+		return
+	}
+	now := s.now()
+	if ref.TurnStateFor(observation.Model, now) != "" {
+		// 这次请求本可以带着已捕获的 state 发出：上游返回的值不是新捕获。
+		return
+	}
+	if !s.beginNaturalStateCapture(key) {
+		return
+	}
+	observation.ObservedAtMS = naturalStateRecordedAtMS(observation.ObservedAtMS, now)
+	go func() {
+		defer s.endNaturalStateCapture(key)
+		s.captureNaturalTurnState(key, ref.GroupID, observation)
+	}()
+}
+
+// naturalStateRecordedAtMS clamps the observation instant to a usable record
+// time. The replay window starts at the record time, so a missing or future
+// stamp would either lose the capture or extend it past its hour.
+func naturalStateRecordedAtMS(observedAtMS int64, now time.Time) int64 {
+	recordedAtMS := now.UTC().UnixMilli()
+	if observedAtMS <= 0 || observedAtMS > recordedAtMS+stateRefreshClockSkew.Milliseconds() {
+		return recordedAtMS
+	}
+	return observedAtMS
+}
+
+// beginNaturalStateCapture claims the single in-flight capture of one credential
+// and model, so concurrent observations of the same state are written once.
+func (s *Service) beginNaturalStateCapture(key stateRefreshKey) bool {
+	s.naturalMu.Lock()
+	defer s.naturalMu.Unlock()
+	if _, busy := s.naturalCaptures[key]; busy {
+		return false
+	}
+	if s.naturalCaptures == nil {
+		s.naturalCaptures = make(map[stateRefreshKey]struct{})
+	}
+	s.naturalCaptures[key] = struct{}{}
+	s.naturalWrites.Add(1)
+	return true
+}
+
+func (s *Service) endNaturalStateCapture(key stateRefreshKey) {
+	s.naturalMu.Lock()
+	delete(s.naturalCaptures, key)
+	s.naturalMu.Unlock()
+	s.naturalWrites.Done()
+}
+
+// stateRefreshRunning reports whether one credential and model currently has a
+// manual refresh run.
+func (s *Service) stateRefreshRunning(key stateRefreshKey) bool {
+	s.stateMu.Lock()
+	defer s.stateMu.Unlock()
+	_, running := s.stateRuns[key]
+	return running
+}
+
+// captureNaturalTurnState durably stores one observed state and publishes it for
+// replay. The target is validated again off the data path: the group must still
+// serve the model and the credential must still be the identity that produced
+// the state.
+func (s *Service) captureNaturalTurnState(
+	key stateRefreshKey,
+	groupID uint,
+	observation execution.TurnStateObservation,
+) {
+	ctx, cancel := context.WithTimeout(context.Background(), stateRefreshTimeout)
+	defer cancel()
+	if _, _, err := s.loadStateRefreshTarget(ctx, groupID, key.credentialID, key.model); err != nil {
+		if !errors.Is(err, app_errors.ErrValidation) && !errors.Is(err, app_errors.ErrResourceNotFound) {
+			s.logNaturalStateCaptureFailure(groupID, key.credentialID, key.model, err)
+		}
+		return
+	}
+	record := models.CredentialStateRefreshLog{
+		GroupID:      groupID,
+		CredentialID: key.credentialID,
+		Status:       models.CredentialStateRefreshSucceeded,
+		TurnState:    observation.TurnState,
+		StateLength:  len(observation.TurnState),
+		// 实时捕获没有探测请求：序号为 0，输入、耗时与 HTTP 状态都不适用。
+		Model:       key.model,
+		ProxyURL:    observation.ProxyURL,
+		BaseURL:     observation.BaseURL,
+		CreatedAtMS: observation.ObservedAtMS,
+	}
+	guard := s.credentialIdentityGuard(key.credentialID, observation.IdentityGeneration)
+	if err := s.persistCredentialTurnState(
+		ctx, groupID, key.credentialID, key.model, observation.TurnState, observation.ObservedAtMS, record, guard,
+	); err != nil && !errors.Is(err, errNaturalStateCaptureStale) {
+		s.logNaturalStateCaptureFailure(groupID, key.credentialID, key.model, err)
+	}
+}
+
+// credentialIdentityGuard refuses a capture whose credential was replaced while
+// the observation was in flight: a turn state belongs to the account that
+// produced it and is never inherited by a re-authenticated credential.
+func (s *Service) credentialIdentityGuard(credentialID uint, identityGeneration uint64) func() error {
+	return func() error {
+		ref, ok := s.registry.CredentialRef(credentialID)
+		if !ok || ref.IdentityGeneration != identityGeneration {
+			return errNaturalStateCaptureStale
+		}
+		return nil
+	}
+}
+
+// logNaturalStateCaptureFailure reports a live capture that could not be
+// recorded. The data path already answered its caller, so only the log carries
+// the failure.
+func (s *Service) logNaturalStateCaptureFailure(groupID uint, credentialID uint, model string, err error) {
+	utils.LogPlaneBestEffort(
+		logrus.StandardLogger(),
+		logrus.WarnLevel,
+		utils.LogPlaneControl,
+		logrus.Fields{"group_id": groupID, "credential_id": credentialID, "model": model},
+		fmt.Sprintf("Live turn state capture was not recorded: %v", err),
+	)
 }
 
 // runCredentialStateRefresh repeats one probe attempt until the run captures a
@@ -478,7 +646,7 @@ func (s *Service) probeCredentialTurnState(
 		DurationMS:   stateRefreshDurationMS(s.now(), startedAt),
 		CreatedAtMS:  refreshedAtMS,
 	}
-	if err := s.persistCredentialTurnState(ctx, groupID, credentialID, model, probed.TurnState, refreshedAtMS, record); err != nil {
+	if err := s.persistCredentialTurnState(ctx, groupID, credentialID, model, probed.TurnState, refreshedAtMS, record, nil); err != nil {
 		s.logStateRefreshFailure(groupID, credentialID, err)
 	}
 	return true, false
@@ -610,9 +778,11 @@ func mapStateRefreshReadError(err error) error {
 
 // persistCredentialTurnState durably stores the captured value of one model and
 // its record time, retires the failures of the run that produced it, and
-// appends the refresh record in the same transaction so the stored state, its
+// appends the capture record in the same transaction so the stored state, its
 // record time, and its log entry always agree. Turn state is mutable runtime
-// state, so publication never invalidates in-flight requests.
+// state, so publication never invalidates in-flight requests. A non-nil guard
+// runs inside the write, holding the credential's mutation coordination, and
+// refuses a capture whose target no longer matches.
 func (s *Service) persistCredentialTurnState(
 	ctx context.Context,
 	groupID uint,
@@ -621,8 +791,14 @@ func (s *Service) persistCredentialTurnState(
 	turnState string,
 	refreshedAtMS int64,
 	record models.CredentialStateRefreshLog,
+	guard func() error,
 ) error {
 	return s.writeCredentialConfig(ctx, groupID, credentialID, func(tx *gorm.DB) error {
+		if guard != nil {
+			if err := guard(); err != nil {
+				return err
+			}
+		}
 		// 捕获成功后这次运行的失败记录不再有意义，与成功记录同事务清理。
 		if err := pruneFailedStateRefreshLogs(tx, groupID, credentialID, model); err != nil {
 			return err
@@ -746,6 +922,7 @@ func credentialStateRefreshLogResponse(row models.CredentialStateRefreshLog) Cre
 		ErrorCode:   row.ErrorCode,
 		TurnState:   row.TurnState,
 		StateLength: row.StateLength,
+		Source:      string(row.Source()),
 		Attempts:    row.Attempts,
 		HTTPStatus:  row.HTTPStatus,
 		Model:       row.Model,

@@ -589,6 +589,7 @@ export default {
           loading: 'State 記録を読み込み中',
           loadFailed: 'State 記録を読み込めません',
           status: { succeeded: '成功', failed: '失敗' },
+          source: { refresh: '手動更新', natural: '自然取得' },
           attempts: '第 {count} 回目の試行',
           stateLength: '長さ {length}',
           model: 'モデル',
@@ -602,8 +603,6 @@ export default {
           result: '失敗理由',
           httpStatus: 'HTTP ステータス',
           captured: '取得した State',
-          showRequest: 'リクエスト詳細を表示',
-          hideRequest: 'リクエスト詳細を隠す',
           request: 'リクエスト詳細',
           failure: {
             unauthorized: '認証情報の再認証が必要',

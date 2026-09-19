@@ -92,6 +92,9 @@ type Service struct {
 	observationSemaphore       chan struct{}
 	stateMu                    sync.Mutex
 	stateRuns                  map[stateRefreshKey]*stateRefreshRun
+	naturalMu                  sync.Mutex
+	naturalCaptures            map[stateRefreshKey]struct{}
+	naturalWrites              sync.WaitGroup
 	stateRefreshMinInterval    time.Duration
 	stateRefreshMaxInterval    time.Duration
 	stateRefreshRateLimitDelay time.Duration

@@ -207,6 +207,7 @@ const stateModelFields = [
 const stateRecordFields = [
   'id',
   'status',
+  'source',
   'error_code',
   'turn_state',
   'state_length',
@@ -220,6 +221,7 @@ const stateRecordFields = [
   'created_at_ms',
 ] as const
 const stateRefreshStatuses = ['succeeded', 'failed'] as const
+const stateRefreshSources = ['refresh', 'natural'] as const
 const planFields = ['name', 'level'] as const
 const observationAccountFields = [
   'display_name',
@@ -570,6 +572,7 @@ function projectCredentialStateRecord(value: unknown): CredentialStateRecordDto 
   return {
     id: projectSafeInteger(record.id, { minimum: 1 }),
     status: projectEnum(record.status, stateRefreshStatuses),
+    source: projectEnum(record.source, stateRefreshSources),
     ...(record.error_code === undefined
       ? {}
       : { error_code: projectString(record.error_code, { allowEmpty: true }) }),

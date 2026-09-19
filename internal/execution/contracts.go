@@ -254,6 +254,10 @@ type AttemptSpec struct {
 	// ContinuityKey is an opaque tenant-scoped value for provider-private
 	// thinking/tool continuity. It is never persisted, logged, or exposed.
 	ContinuityKey string `json:"-"`
+	// TurnStateReplayed reports that GPT-Load replayed a captured turn state on
+	// this attempt. A replayed state stays authoritative for its whole lifetime,
+	// so a state the upstream returns on such an attempt never replaces it.
+	TurnStateReplayed bool `json:"-"`
 	// TargetConfig is non-secret configuration resolved by the channel registry.
 	TargetConfig     json.RawMessage         `json:"target_config,omitempty"`
 	Timeouts         AttemptTimeouts         `json:"timeouts"`

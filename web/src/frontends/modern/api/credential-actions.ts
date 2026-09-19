@@ -114,6 +114,8 @@ export interface CredentialStateRefreshRecord {
   baseUrl: string
   durationMs: number
   createdAt: number
+  // 记录这次 state 的来源：手动刷新探测或实时请求捕获。
+  source: 'refresh' | 'natural'
 }
 // CredentialStateModelState 是一个模型已保留的 state：同一凭据的每个模型各自刷新、互不影响。
 export interface CredentialStateModelState {
@@ -152,6 +154,7 @@ function readStateRefreshRecord(value: unknown): CredentialStateRefreshRecord {
     baseUrl: text(row.base_url),
     durationMs: integer(row.duration_ms),
     createdAt: integer(row.created_at_ms, 1),
+    source: oneOf(row.source, ['refresh', 'natural']),
   }
 }
 function readStateModelState(value: unknown): CredentialStateModelState {

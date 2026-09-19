@@ -1191,7 +1191,7 @@ func (handler *Handler) executeAttempts(
 			Proxy:            effectiveProxy,
 			ProxyFingerprint: proxyFingerprint,
 			CredentialTurnState: ref.TurnStateFor(
-				TurnStateModel(optionalModelValue(selection.UpstreamModelID), externalModel),
+				execution.TurnStateModel(optionalModelValue(selection.UpstreamModelID), externalModel),
 				handler.now(),
 			),
 			ForceCredentialRefresh: forceCredentialRefresh,

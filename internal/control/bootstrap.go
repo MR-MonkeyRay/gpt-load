@@ -101,5 +101,10 @@ func (s *Service) EnsureInitialState(ctx context.Context) error {
 	}
 	s.priceRuntime.Publish(priceTable)
 	logrus.WithField("event", "startup.model_prices_publish").Info("model prices published")
+	// 自动刷新是数据面与巡检共用的内存开关：先装载一次，第一个请求就知道哪些凭据
+	// 开启了自动刷新。
+	if err := s.loadAutoRefreshCredentials(ctx); err != nil {
+		return fmt.Errorf("ensure initial control state: %w", err)
+	}
 	return nil
 }

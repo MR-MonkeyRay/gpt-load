@@ -129,6 +129,8 @@ export interface CredentialStateModelState {
 }
 export interface CredentialStateSnapshot {
   requiredLength: number
+  // autoRefresh 是该凭据是否开启自动刷新 State：开启后由服务端自行保持其服务模型的 State 有效。
+  autoRefresh: boolean
   // availableModels 是分组已配置的模型，也就是可以刷新的模型。
   availableModels: string[]
   // model 是本次回看的模型：请求未指定时由服务端选出默认模型。
@@ -180,6 +182,7 @@ function readCredentialStateSnapshot(value: unknown): CredentialStateSnapshot {
   const data = record(value)
   return {
     requiredLength: integer(data.required_length, 1),
+    autoRefresh: boolean(data.auto_refresh),
     availableModels: list(data.available_models).map((model) => text(model)),
     model: text(data.model),
     running: boolean(data.running),
@@ -236,6 +239,22 @@ export async function stopCredentialStateRefresh(
       `/api/groups/${group}/credentials/${id}/state-refresh${stateRefreshQuery(model)}`,
       { method: 'DELETE', signal },
     ),
+  )
+}
+// 切换该凭据的自动刷新 State 开关：返回的快照已带上新的开关状态。
+export async function setCredentialStateAutoRefresh(
+  client: ApiClient,
+  group: number,
+  id: number,
+  enabled: boolean,
+  signal: AbortSignal,
+): Promise<CredentialStateSnapshot> {
+  return readCredentialStateSnapshot(
+    await client.request(`/api/groups/${group}/credentials/${id}/state-refresh/auto`, {
+      method: 'PUT',
+      json: { enabled },
+      signal,
+    }),
   )
 }
 export async function revealCredential(

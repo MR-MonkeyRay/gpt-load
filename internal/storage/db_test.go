@@ -677,6 +677,7 @@ func TestAutoMigrateCreatesUsageJournalAndMigrationLedger(t *testing.T) {
 		"0018_turn_state",
 		"0019_credential_state_refresh",
 		"0020_credential_turn_states",
+		"0021_credential_state_auto_refresh",
 	}
 	if !reflect.DeepEqual(migrationIDs, wantMigrationIDs) {
 		t.Fatalf("schema_migrations IDs = %v, want %v", migrationIDs, wantMigrationIDs)

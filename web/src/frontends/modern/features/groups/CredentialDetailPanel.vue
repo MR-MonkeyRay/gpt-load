@@ -9,6 +9,7 @@ import {
   credentialDetailKey,
   getCredentialDetail,
   getCredentialState,
+  setCredentialStateAutoRefresh,
   startCredentialStateRefresh,
   stopCredentialStateRefresh,
   updateCredential,
@@ -26,6 +27,7 @@ import {
   AppOverflowText,
   AppSegmentedField,
   AppSelect,
+  AppSwitch,
   AppTextField,
   AppTooltip,
 } from '@modern/components/ui'
@@ -190,6 +192,9 @@ const stateRunningModels = computed(() => stateQuery.data.value?.runningModels ?
 const stateStopping = ref<string[]>([])
 const statePending = ref(false)
 const stateFeedback = ref('')
+// 自动刷新是凭据级开关：开关状态由服务端快照给出，切换结果仍以服务端返回的快照为准。
+const stateAutoRefresh = computed(() => stateQuery.data.value?.autoRefresh ?? false)
+const stateAutoRefreshPending = ref(false)
 const stateController = new AbortController()
 function stateProxyLabel(value: string): string {
   if (value === 'direct') return t('credentialCards.state.proxyDirect')
@@ -271,6 +276,29 @@ async function toggleStateRefresh(): Promise<void> {
     }
   } finally {
     statePending.value = false
+  }
+}
+// 自动刷新是凭据级开关：切换后把返回的快照写回当前查询键，界面继续跟随服务端。
+async function toggleStateAutoRefresh(value: boolean): Promise<void> {
+  if (stateAutoRefreshPending.value || stateController.signal.aborted) return
+  stateAutoRefreshPending.value = true
+  stateFeedback.value = ''
+  try {
+    const snapshot = await setCredentialStateAutoRefresh(
+      client,
+      props.group.id,
+      props.row.id,
+      value,
+      stateController.signal,
+    )
+    if (stateController.signal.aborted) return
+    cache.setQueryData(stateQueryKey.value, snapshot)
+  } catch {
+    if (!stateController.signal.aborted) {
+      stateFeedback.value = t('credentialCards.state.autoRefreshFailed')
+    }
+  } finally {
+    stateAutoRefreshPending.value = false
   }
 }
 onScopeDispose(() => stateController.abort())
@@ -466,6 +494,16 @@ useMessageSource(() =>
             }}
           </AppButton>
         </div>
+        <div class="modern-credential-detail-state-auto">
+          <span>{{ t('credentialCards.state.autoRefresh') }}</span
+          ><AppSwitch
+            size="sm"
+            :model-value="stateAutoRefresh"
+            :label="t('credentialCards.state.autoRefresh')"
+            :disabled="stateAutoRefreshPending || !stateQuery.data.value"
+            @update:model-value="toggleStateAutoRefresh"
+          />
+        </div>
         <div v-if="stateRunningModels.length" class="modern-state-tasks">
           <span class="modern-state-history-title">{{ t('credentialCards.state.tasks') }}</span>
           <div v-for="model in stateRunningModels" :key="model" class="modern-state-task">
@@ -501,6 +539,9 @@ useMessageSource(() =>
                 length: n(stateQuery.data.value.requiredLength),
               })
             }}
+          </p>
+          <p v-if="stateQuery.data.value" class="modern-credential-detail-hint">
+            {{ t('credentialCards.state.autoRefreshHint') }}
           </p>
           <div class="modern-state-history">
             <span class="modern-state-history-title">{{ t('credentialCards.state.models') }}</span>
@@ -701,6 +742,14 @@ useMessageSource(() =>
   grid-template-columns: minmax(0, 1fr) max-content;
   align-items: end;
   gap: var(--modern-space-3);
+}
+.modern-credential-detail-state-auto {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--modern-space-3);
+  color: var(--modern-muted);
+  font-size: var(--modern-font-size-small);
 }
 .modern-state-table {
   display: grid;

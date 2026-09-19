@@ -17,12 +17,30 @@ import (
 type recordingTurnStateObserver struct {
 	mu           sync.Mutex
 	observations []execution.TurnStateObservation
+	uses         []turnStateUse
+}
+
+type turnStateUse struct {
+	credentialID uint
+	model        string
 }
 
 func (observer *recordingTurnStateObserver) ObserveTurnState(observation execution.TurnStateObservation) {
 	observer.mu.Lock()
 	defer observer.mu.Unlock()
 	observer.observations = append(observer.observations, observation)
+}
+
+func (observer *recordingTurnStateObserver) ObserveTurnStateUse(credentialID uint, model string) {
+	observer.mu.Lock()
+	defer observer.mu.Unlock()
+	observer.uses = append(observer.uses, turnStateUse{credentialID: credentialID, model: model})
+}
+
+func (observer *recordingTurnStateObserver) recordedUses() []turnStateUse {
+	observer.mu.Lock()
+	defer observer.mu.Unlock()
+	return append([]turnStateUse(nil), observer.uses...)
 }
 
 func (observer *recordingTurnStateObserver) recorded() []execution.TurnStateObservation {
@@ -233,6 +251,95 @@ func TestObservedWebsocketSessionReportsTurnStateFromMetadataEvents(t *testing.T
 				t.Fatalf("observation = %#v", observation)
 			}
 		})
+	}
+}
+
+// 自动 State 刷新只维护真实请求过的模型，所以每一次进入派发的尝试都要上报
+// (凭据, 上游模型)：上游返回长度不符的令牌（生产实测 312 字节）时同样上报，
+// 否则那个模型永远不会被自动刷新；只走本地计数的尝试没有派发，不上报。
+func TestAdapterReportsUsedModelForEveryDispatchedAttempt(t *testing.T) {
+	adapter, _, _, keyService, row := newAdapterFixture(t, credentialJSON("access", "refresh", time.Now().Add(time.Hour)))
+	observer := &recordingTurnStateObserver{}
+	adapter.SetTurnStateObserver(observer)
+	setCodexExecutor(t, adapter, &fakeExecutor{result: codex.ExecuteResponse{
+		Payload: []byte(`{"id":"resp_1","model":"gpt-5","output":[]}`),
+		Headers: http.Header{execution.CodexTurnStateHeader: {rotatedTurnState()}},
+	}})
+	spec := validSpec(t, row, keyService)
+
+	result := adapter.Execute(t.Context(), spec)
+	if result.Error != nil {
+		t.Fatalf("execute = %+v", result)
+	}
+	uses := observer.recordedUses()
+	if len(uses) != 1 || uses[0].credentialID != spec.Credential.ID || uses[0].model != spec.UpstreamModel {
+		t.Fatalf("uses = %#v", uses)
+	}
+	if observations := observer.recorded(); len(observations) != 0 {
+		t.Fatalf("rotated state was captured: %#v", observations)
+	}
+}
+
+// 上游模型才是 State 的归属：客户端模型不同、上游模型相同的请求上报同一个模型。
+func TestAdapterReportsUsedModelByUpstreamModel(t *testing.T) {
+	adapter, _, _, keyService, row := newAdapterFixture(t, credentialJSON("access", "refresh", time.Now().Add(time.Hour)))
+	observer := &recordingTurnStateObserver{}
+	adapter.SetTurnStateObserver(observer)
+	setCodexExecutor(t, adapter, &fakeExecutor{result: codex.ExecuteResponse{
+		Payload: []byte(`{"id":"resp_1","model":"gpt-5","output":[]}`),
+	}})
+	spec := validSpec(t, row, keyService)
+	spec.ClientModel = "client-alias"
+	spec.UpstreamModel = "gpt-5-codex"
+
+	if result := adapter.Execute(t.Context(), spec); result.Error != nil {
+		t.Fatalf("execute = %+v", result)
+	}
+	uses := observer.recordedUses()
+	if len(uses) != 1 || uses[0].model != "gpt-5-codex" {
+		t.Fatalf("uses = %#v", uses)
+	}
+}
+
+// 本地计数的尝试不经过上游凭据，因此不算「用过」这个模型。
+func TestAdapterDoesNotReportUsedModelForLocalTokenCount(t *testing.T) {
+	adapter, _, _, keyService, row := newAdapterFixture(t, credentialJSON("access", "refresh", time.Now().Add(time.Hour)))
+	observer := &recordingTurnStateObserver{}
+	adapter.SetTurnStateObserver(observer)
+	preparer := &fakeCredentialPreparer{delegate: adapter.credentials}
+	adapter.credentials = preparer
+	setCodexExecutor(t, adapter, &fakeExecutor{countResult: codex.ExecuteResponse{
+		Payload: []byte(`{"object":"response.input_tokens","input_tokens":7}`),
+	}})
+	spec := validSpec(t, row, keyService)
+	spec.Operation = execution.OperationResponsesInputTokens
+	spec.Body = []byte(`{"model":"gpt-5","input":"hello"}`)
+
+	result := adapter.Execute(t.Context(), spec)
+	if result.Error != nil || result.DispatchState != execution.DispatchLocal || preparer.calls != 0 {
+		t.Fatalf("result=%+v prepareCalls=%d", result, preparer.calls)
+	}
+	if uses := observer.recordedUses(); len(uses) != 0 {
+		t.Fatalf("uses = %#v, want none", uses)
+	}
+}
+
+// 打开 WS 会话也是一次真实派发：没有响应头可看也要上报，自动刷新才能在 WS 使用
+// 期间维持 State。
+func TestAdapterReportsUsedModelWhenOpeningWebsocket(t *testing.T) {
+	adapter, _, _, keyService, row := newAdapterFixture(t, credentialJSON("access", "refresh", time.Now().Add(time.Hour)))
+	observer := &recordingTurnStateObserver{}
+	adapter.SetTurnStateObserver(observer)
+	spec := validSpec(t, row, keyService)
+
+	session, result := adapter.OpenWebsocket(t.Context(), spec)
+	if result.Error != nil || session == nil {
+		t.Fatalf("open=%+v", result)
+	}
+	defer session.Close()
+	uses := observer.recordedUses()
+	if len(uses) != 1 || uses[0].credentialID != spec.Credential.ID || uses[0].model != spec.UpstreamModel {
+		t.Fatalf("uses = %#v", uses)
 	}
 }
 

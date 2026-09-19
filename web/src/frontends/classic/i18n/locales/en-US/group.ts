@@ -566,6 +566,10 @@ export default {
         stopRefreshState: 'Stop refreshing state',
         stopRefreshStateSucceeded: 'State refresh stopped',
         stopRefreshStateFailed: 'Unable to stop the state refresh',
+        autoRefreshState: 'Automatic refresh',
+        autoRefreshStateHint:
+          'While on, only the models this credential actually serves keep a valid state: a model missing a valid state or with less than 10 minutes left is refreshed automatically, and a model with no request during its state’s validity window stops being refreshed.',
+        autoRefreshStateFailed: 'Failed to toggle automatic refresh',
         state: {
           title: 'State',
           empty: 'Not recorded yet',

@@ -164,6 +164,13 @@ func (runtime *Runtime) Run(ctx context.Context) {
 			runtime.oauthCallback.Run(ctx)
 		}()
 	}
+	if runtime.stateRefreshes != nil {
+		wait.Add(1)
+		go func() {
+			defer wait.Done()
+			runtime.stateRefreshes.runStateAutoRefresh(ctx)
+		}()
+	}
 	wait.Wait()
 	if runtime.stateRefreshes != nil {
 		// 后台 State 刷新属于控制面运行期的一部分，必须在存储关闭前收敛。

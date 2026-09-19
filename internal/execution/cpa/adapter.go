@@ -98,6 +98,21 @@ func (a *Adapter) SetTurnStateObserver(observer execution.TurnStateObserver) {
 	a.turnStates = observer
 }
 
+// recordTurnStateUse reports that one credential serves one upstream model on a
+// real attempt. The control plane keeps a model's turn state valid only while
+// that model keeps being used, so every dispatched attempt reports the pair it
+// carried, whether or not the response later provides a state.
+func (a *Adapter) recordTurnStateUse(spec execution.AttemptSpec) {
+	if a == nil || a.turnStates == nil || spec.Credential.ID == 0 {
+		return
+	}
+	model := execution.TurnStateModel(spec.UpstreamModel, spec.ClientModel)
+	if model == "" {
+		return
+	}
+	a.turnStates.ObserveTurnStateUse(spec.Credential.ID, model)
+}
+
 // recordObservedTurnState reports a complete turn state the upstream returned on
 // a real attempt. A replayed state stays authoritative for its whole lifetime,
 // so only an attempt that carried no state can produce a new capture; a header
@@ -233,6 +248,8 @@ func (a *Adapter) Execute(ctx context.Context, spec execution.AttemptSpec) (resu
 	if err != nil {
 		return unaryNotSent(execution.ErrorKindInternal, "subscription credential adapter mismatch", "", err)
 	}
+	// 请求已进入真实派发：无论上游是否返回 state，这个 (凭据, 模型) 都算用过。
+	a.recordTurnStateUse(spec)
 	execCtx, cancel := withRequestTimeout(ctx, spec.Timeouts.Request)
 	defer cancel()
 	var response providerResponse
@@ -387,6 +404,8 @@ func (a *Adapter) ExecuteStream(
 	if err != nil {
 		return streamNotSent(execution.ErrorKindInternal, "subscription credential adapter mismatch", "")
 	}
+	// 请求已进入真实派发：无论上游是否返回 state，这个 (凭据, 模型) 都算用过。
+	a.recordTurnStateUse(spec)
 	execCtx, cancel := withRequestTimeout(ctx, spec.Timeouts.Request)
 	defer cancel()
 	streamCtx, cancelStream := context.WithCancelCause(execCtx)

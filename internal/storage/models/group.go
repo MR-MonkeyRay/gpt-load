@@ -68,10 +68,13 @@ type Credential struct {
 	AuthErrorCode       string              `gorm:"type:varchar(64);not null;default:''"`
 	Status              CredentialStatus    `gorm:"type:varchar(32);not null;default:'active';check:chk_credential_status,status IN ('active','disabled')"`
 	WeightManual        *int
-	ProxyConfig         *string `gorm:"column:proxy_config;type:text"`
-	Group               *Group  `gorm:"foreignKey:GroupID;references:ID;constraint:OnUpdate:CASCADE,OnDelete:CASCADE"`
-	CreatedAtMS         int64   `gorm:"column:created_at_ms;not null;autoCreateTime:milli;check:chk_credential_created_at,created_at_ms >= 0"`
-	UpdatedAtMS         int64   `gorm:"column:updated_at_ms;not null;autoUpdateTime:milli;check:chk_credential_updated_at,updated_at_ms >= 0"`
+	// StateAutoRefresh 是操作者选择：开启后控制面自行保持该凭据用过的模型的 turn
+	// state 有效，不依赖任何单次手动刷新。
+	StateAutoRefresh bool    `gorm:"column:state_auto_refresh;not null;default:false"`
+	ProxyConfig      *string `gorm:"column:proxy_config;type:text"`
+	Group            *Group  `gorm:"foreignKey:GroupID;references:ID;constraint:OnUpdate:CASCADE,OnDelete:CASCADE"`
+	CreatedAtMS      int64   `gorm:"column:created_at_ms;not null;autoCreateTime:milli;check:chk_credential_created_at,created_at_ms >= 0"`
+	UpdatedAtMS      int64   `gorm:"column:updated_at_ms;not null;autoUpdateTime:milli;check:chk_credential_updated_at,updated_at_ms >= 0"`
 }
 
 type CredentialAuthState string

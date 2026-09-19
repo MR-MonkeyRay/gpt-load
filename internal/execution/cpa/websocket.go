@@ -75,6 +75,9 @@ func (a *Adapter) OpenWebsocket(ctx context.Context, spec execution.AttemptSpec)
 	if err != nil {
 		return reject()
 	}
+	// 请求已进入真实派发：无论上游是否在事件或响应头里返回 state，这个 (凭据, 模型)
+	// 都算用过。
+	a.recordTurnStateUse(spec)
 	observationSpec := execution.AttemptSpec{Credential: execution.NewCredentialSnapshot(spec.Credential.ID, spec.Credential.Version, spec.Credential.IdentityGeneration, nil)}
 	// 观察用的 spec 不带请求头，turn state 只依赖凭据、模型和是否回放过。
 	turnStateSpec := observationSpec

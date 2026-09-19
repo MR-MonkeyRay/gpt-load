@@ -190,6 +190,7 @@ const observationSnapshotFields = [
 ] as const
 const stateRefreshFields = [
   'required_length',
+  'auto_refresh',
   'available_models',
   'model',
   'running',
@@ -546,6 +547,7 @@ function projectCredentialStateRefresh(value: unknown): CredentialStateDto {
   assertNoSecretLikeFields(record, stateRefreshFields)
   return {
     required_length: projectSafeInteger(record.required_length, { minimum: 1 }),
+    auto_refresh: projectBoolean(record.auto_refresh),
     available_models: projectArray(record.available_models, (model) => projectString(model)),
     model: projectString(record.model, { allowEmpty: true }),
     running: projectBoolean(record.running),
@@ -1118,6 +1120,23 @@ export async function getCredentialState(
 ): Promise<CredentialStateDto> {
   return projectCredentialStateRefresh(
     await client.request(credentialStateRefreshURL(groupId, credentialId, model), {
+      signal,
+    }),
+  )
+}
+
+/** 开启或关闭该凭据的自动 State 刷新，返回最新快照。 */
+export async function setCredentialStateAutoRefresh(
+  client: ApiClient,
+  groupId: number,
+  credentialId: number,
+  enabled: boolean,
+  signal?: AbortSignal,
+): Promise<CredentialStateDto> {
+  return projectCredentialStateRefresh(
+    await client.request(`/api/groups/${groupId}/credentials/${credentialId}/state-refresh/auto`, {
+      method: 'PUT',
+      json: { enabled },
       signal,
     }),
   )

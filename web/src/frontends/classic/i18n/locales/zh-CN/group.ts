@@ -547,6 +547,10 @@ export default {
         stopRefreshState: '停止刷新 State',
         stopRefreshStateSucceeded: '已停止刷新 State',
         stopRefreshStateFailed: '无法停止刷新 State',
+        autoRefreshState: '自动刷新',
+        autoRefreshStateHint:
+          '开启后只为该凭据真实请求过的模型保持 State 有效：缺少有效 State 或剩余有效期不足 10 分钟时自动刷新，State 有效期内没有请求的模型停止刷新。',
+        autoRefreshStateFailed: '无法切换自动刷新',
         state: {
           title: 'State 状态',
           empty: '尚未记录',

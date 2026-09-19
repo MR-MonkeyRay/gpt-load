@@ -113,6 +113,9 @@ type CredentialStateModelResponse struct {
 type CredentialStateResponse struct {
 	// RequiredLength 是保留状态所需的完整长度，供界面说明保留规则。
 	RequiredLength int `json:"required_length"`
+	// AutoRefresh 是该凭据是否开启了自动刷新：开启后控制面自行保持用过的模型的
+	// State 有效。
+	AutoRefresh bool `json:"auto_refresh"`
 	// AvailableModels 是该分组配置的模型，也就是可以刷新 State 的模型。
 	AvailableModels []string `json:"available_models"`
 	// Model 是本次回看的模型；请求未指定时由服务端选出默认模型。
@@ -133,10 +136,12 @@ type stateRefreshKey struct {
 }
 
 // stateRefreshRun is one in-flight background refresh of a single credential
-// and model.
+// and model. auto records whether automatic state refresh started it, so the
+// switch that turned it on can stop exactly the runs it owns.
 type stateRefreshRun struct {
 	cancel context.CancelFunc
 	done   chan struct{}
+	auto   bool
 }
 
 // stateRefreshOutcome is the recorded shape of one refresh probe.
@@ -198,6 +203,7 @@ func (s *Service) GetCredentialState(
 			return err
 		}
 		response.AvailableModels = availableModels
+		response.AutoRefresh = credential.StateAutoRefresh
 		var captures []models.CredentialTurnState
 		if err := tx.Where("credential_id = ?", credentialID).Order("model ASC").Find(&captures).Error; err != nil {
 			return err
@@ -260,26 +266,50 @@ func (s *Service) StartCredentialStateRefresh(
 	if _, _, err := s.loadStateRefreshTarget(ctx, groupID, credentialID, model); err != nil {
 		return CredentialStateResponse{}, err
 	}
+	s.startStateRefreshRun(ctx, groupID, credentialID, model, false)
+	return s.GetCredentialState(ctx, groupID, credentialID, model)
+}
+
+// startStateRefreshRun registers and launches one background refresh run, which
+// repeats the probe until it captures a complete turn state for that model,
+// cannot prepare another attempt, or is stopped. The caller has already
+// validated the target; starting a model that is already refreshing is
+// idempotent. auto marks the run as owned by automatic state refresh.
+func (s *Service) startStateRefreshRun(
+	ctx context.Context,
+	groupID uint,
+	credentialID uint,
+	model string,
+	auto bool,
+) {
 	key := stateRefreshKey{credentialID: credentialID, model: model}
 	s.stateMu.Lock()
-	if _, running := s.stateRuns[key]; !running {
-		if s.stateRuns == nil {
-			s.stateRuns = make(map[stateRefreshKey]*stateRefreshRun)
+	defer s.stateMu.Unlock()
+	if run, running := s.stateRuns[key]; running {
+		// 操作者显式发起的运行接管同一条运行：之后关闭自动刷新不该把它当成自动
+		// 刷新开的运行取消掉。
+		if !auto {
+			run.auto = false
 		}
-		// 刷新必须活过发起它的请求，但保留请求上下文中的取值。
-		runContext, cancel := context.WithCancel(context.WithoutCancel(ctx))
-		run := &stateRefreshRun{cancel: cancel, done: make(chan struct{})}
-		s.stateRuns[key] = run
-		go s.runCredentialStateRefresh(runContext, groupID, credentialID, model, run)
+		return
 	}
-	s.stateMu.Unlock()
-	return s.GetCredentialState(ctx, groupID, credentialID, model)
+	if s.stateRuns == nil {
+		s.stateRuns = make(map[stateRefreshKey]*stateRefreshRun)
+	}
+	// 刷新必须活过发起它的请求，但保留请求上下文中的取值。
+	runContext, cancel := context.WithCancel(context.WithoutCancel(ctx))
+	run := &stateRefreshRun{cancel: cancel, done: make(chan struct{}), auto: auto}
+	s.stateRuns[key] = run
+	go s.runCredentialStateRefresh(runContext, groupID, credentialID, model, run)
 }
 
 // StopCredentialStateRefresh cancels the in-flight refresh runs of one
 // credential and waits for their probes to converge, so the returned snapshot
 // already carries the closing records. An empty model stops every run of the
-// credential; stopping an idle credential is a no-op.
+// credential; stopping an idle credential is a no-op. The button stops the
+// current run: while automatic state refresh is on, a model that is still being
+// used is probed again after the retry cooldown, because automatic refresh only
+// pauses a model its state's validity window saw no request for.
 func (s *Service) StopCredentialStateRefresh(
 	ctx context.Context,
 	groupID uint,
@@ -324,16 +354,37 @@ func (s *Service) stopStateRefreshes() {
 			return
 		}
 	}
-	// 实时捕获的落库也是运行期工作：存储关闭前同样要收敛。
-	natural := make(chan struct{})
+	// 实时捕获与用点落库也是运行期工作：存储关闭前同样要收敛。
+	background := make(chan struct{})
 	go func() {
 		s.naturalWrites.Wait()
-		close(natural)
+		s.autoRefresh.writes.Wait()
+		close(background)
 	}()
 	select {
-	case <-natural:
+	case <-background:
 	case <-deadline.C:
 	}
+}
+
+// cancelAutoRefreshRuns cancels the matching runs that automatic state refresh
+// started, leaving operator-started runs untouched, and returns them for the
+// caller to wait on. An empty model matches every automatic run of the
+// credential.
+func (s *Service) cancelAutoRefreshRuns(credentialID uint, model string) []*stateRefreshRun {
+	s.stateMu.Lock()
+	defer s.stateMu.Unlock()
+	runs := make([]*stateRefreshRun, 0, len(s.stateRuns))
+	for key, run := range s.stateRuns {
+		if !run.auto || key.credentialID != credentialID || model != "" && key.model != model {
+			continue
+		}
+		runs = append(runs, run)
+	}
+	for _, run := range runs {
+		run.cancel()
+	}
+	return runs
 }
 
 // cancelStateRefreshRuns cancels the matching runs and returns them for the
@@ -460,7 +511,7 @@ func (s *Service) endNaturalStateCapture(key stateRefreshKey) {
 }
 
 // stateRefreshRunning reports whether one credential and model currently has a
-// manual refresh run.
+// refresh run, whoever started it.
 func (s *Service) stateRefreshRunning(key stateRefreshKey) bool {
 	s.stateMu.Lock()
 	defer s.stateMu.Unlock()
@@ -926,6 +977,19 @@ func (s *Service) logStateRefreshFailure(groupID uint, credentialID uint, err er
 		utils.LogPlaneControl,
 		logrus.Fields{"group_id": groupID, "credential_id": credentialID},
 		fmt.Sprintf("State refresh run stopped: %v", err),
+	)
+}
+
+// logStateAutoRefreshFailure reports an automatic state refresh failure that no
+// request can return to its caller: the sweep reads the used set and ends the
+// watch of idle models outside any request.
+func (s *Service) logStateAutoRefreshFailure(groupID uint, credentialID uint, err error) {
+	utils.LogPlaneBestEffort(
+		logrus.StandardLogger(),
+		logrus.WarnLevel,
+		utils.LogPlaneControl,
+		logrus.Fields{"group_id": groupID, "credential_id": credentialID},
+		fmt.Sprintf("Automatic state refresh failed: %v", err),
 	)
 }
 

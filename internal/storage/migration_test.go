@@ -32,6 +32,7 @@ func TestMigrationRegistryContainsOrderedMigrations(t *testing.T) {
 		migrationfiles.ID0018,
 		migrationfiles.ID0019,
 		migrationfiles.ID0020,
+		migrationfiles.ID0021,
 	}
 	if len(migrations) != len(wantIDs) {
 		t.Fatalf("migration registry length = %d, want %d", len(migrations), len(wantIDs))
@@ -82,17 +83,21 @@ func TestApplyMigrationRegistryRejectsOutOfOrderEntries(t *testing.T) {
 }
 
 // TestAutoMigrateUpgradesShippedStateRefreshSchema 保证停在 0019 的库（单值 state 列 +
-// 刷新日志表，没有按模型捕获表）能直接升级：0020 补齐捕获表并退休单值列，已有数据不动。
+// 刷新日志表，没有按模型捕获表）能直接升级到最新：0020 补齐捕获表并退休单值列，0021
+// 补上自动刷新选择与用过的模型表，已有数据不动。
 func TestAutoMigrateUpgradesShippedStateRefreshSchema(t *testing.T) {
 	t.Parallel()
 	db := openInternalMigrationTestDatabase(t)
 	if err := AutoMigrate(db); err != nil {
 		t.Fatalf("first AutoMigrate() error = %v", err)
 	}
-	// 退回 0019 发布后的形态：删掉 0020 的账本行与捕获表，恢复两个单值列。
+	// 退回 0019 发布后的形态：删掉 0020、0021 的账本行与它们建的表，恢复两个单值列。
 	for _, statement := range []string{
 		"DROP TABLE credential_turn_states",
 		"DELETE FROM schema_migrations WHERE id = '0020_credential_turn_states'",
+		"DROP TABLE credential_used_models",
+		"DELETE FROM schema_migrations WHERE id = '0021_credential_state_auto_refresh'",
+		"ALTER TABLE credentials DROP COLUMN state_auto_refresh",
 		"ALTER TABLE credentials ADD COLUMN turn_state VARCHAR(512) NOT NULL DEFAULT ''",
 		"ALTER TABLE credentials ADD COLUMN turn_state_refreshed_at_ms BIGINT NOT NULL DEFAULT 0",
 	} {
@@ -115,6 +120,10 @@ func TestAutoMigrateUpgradesShippedStateRefreshSchema(t *testing.T) {
 	if !db.Migrator().HasTable("credential_turn_states") {
 		t.Fatal("per-model capture table is missing after the upgrade")
 	}
+	if !db.Migrator().HasTable("credential_used_models") ||
+		!db.Migrator().HasColumn("credentials", "state_auto_refresh") {
+		t.Fatal("automatic state refresh schema is missing after the upgrade")
+	}
 	for _, column := range []string{"turn_state", "turn_state_refreshed_at_ms"} {
 		if db.Migrator().HasColumn("credentials", column) {
 			t.Fatalf("credentials column %s survived the upgrade", column)
@@ -131,7 +140,7 @@ func TestAutoMigrateUpgradesShippedStateRefreshSchema(t *testing.T) {
 	if err := db.Table("schema_migrations").Order("id DESC").Limit(1).Pluck("id", &last).Error; err != nil {
 		t.Fatal(err)
 	}
-	if last != migrationfiles.ID0020 {
+	if last != migrationfiles.ID0021 {
 		t.Fatalf("last migration after the upgrade = %q", last)
 	}
 	// 升级后的库在下次启动时会重新复验已应用的 0019，而单值列已经不在。

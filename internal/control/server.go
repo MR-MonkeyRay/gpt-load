@@ -590,6 +590,33 @@ func (s *Server) handleStopGroupCredentialState(c *gin.Context) {
 	response.SuccessI18n(c, "common.success", result)
 }
 
+func (s *Server) handleSetGroupCredentialStateAutoRefresh(c *gin.Context) {
+	groupID, ok := groupID(c, "set_group_credential_state_auto_refresh")
+	if !ok {
+		return
+	}
+	credentialID, ok := credentialID(c, "set_group_credential_state_auto_refresh")
+	if !ok {
+		return
+	}
+	var request CredentialStateAutoRefreshRequest
+	if err := c.ShouldBindJSON(&request); err != nil {
+		writeServiceError(c, "set_group_credential_state_auto_refresh", mapControlJSONError(err))
+		return
+	}
+	result, err := s.service.SetCredentialStateAutoRefresh(
+		c.Request.Context(),
+		groupID,
+		credentialID,
+		request.Enabled,
+	)
+	if err != nil {
+		writeServiceError(c, "set_group_credential_state_auto_refresh", err)
+		return
+	}
+	response.SuccessI18n(c, "common.success", result)
+}
+
 func (s *Server) handleRefreshGroupCredential(c *gin.Context) {
 	groupID, ok := groupID(c, "refresh_group_credential")
 	if !ok {

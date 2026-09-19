@@ -95,6 +95,8 @@ type Service struct {
 	naturalMu                  sync.Mutex
 	naturalCaptures            map[stateRefreshKey]struct{}
 	naturalWrites              sync.WaitGroup
+	autoRefresh                stateAutoRefresh
+	stateAutoSweepInterval     time.Duration
 	stateRefreshMinInterval    time.Duration
 	stateRefreshMaxInterval    time.Duration
 	stateRefreshRateLimitDelay time.Duration
@@ -194,6 +196,12 @@ func NewService(
 		modelDiscoveryTimeout: defaultModelDiscoveryTimeout,
 		random:                rand.Reader,
 		operationRandom:       rand.Reader,
+		autoRefresh: stateAutoRefresh{
+			credentials: make(map[uint]struct{}),
+			models:      make(map[stateRefreshKey]stateAutoModel),
+			retryAt:     make(map[stateRefreshKey]time.Time),
+			wake:        make(chan struct{}, 1),
+		},
 		beginSubscriptionAuthorization: func(channelID channel.ID) (subscriptionruntime.Authorization, error) {
 			browser, ok := subscriptionsBrowser(subscriptions, channelID)
 			if !ok {

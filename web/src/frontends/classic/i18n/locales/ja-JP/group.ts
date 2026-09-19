@@ -571,6 +571,10 @@ export default {
         stopRefreshState: 'Stateの更新を停止',
         stopRefreshStateSucceeded: 'Stateの更新を停止しました',
         stopRefreshStateFailed: 'Stateの更新を停止できません',
+        autoRefreshState: '自動更新',
+        autoRefreshStateHint:
+          'オンにすると、この認証情報が実際にリクエストしたモデルの State だけを有効に保ちます。有効な State がない、または残りの有効期間が 10 分未満のモデルは自動で更新され、State の有効期間内にリクエストがなかったモデルは更新を停止します。',
+        autoRefreshStateFailed: '自動更新を切り替えられません',
         state: {
           title: 'State 状態',
           empty: 'まだ記録されていません',

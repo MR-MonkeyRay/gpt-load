@@ -80,6 +80,7 @@ const emit = defineEmits<{
   download: [item: CredentialItemDto]
   'refresh-credential': [item: CredentialItemDto]
   'refresh-state': [payload: { item: CredentialItemDto; model: string }]
+  'set-auto-refresh-state': [payload: { item: CredentialItemDto; enabled: boolean }]
   'stop-state': [payload: { item: CredentialItemDto; model: string }]
   'load-state': [payload: { item: CredentialItemDto; model: string }]
   remove: [item: CredentialItemDto]
@@ -287,6 +288,10 @@ const stateActionLabel = computed(() =>
 const stateActionDisabled = computed(
   () => props.busy || (stateModels.value.length === 0 && !stateRunning.value),
 )
+// 自动刷新是凭据级开关：开关值只取自服务端快照，本地不改写。
+const stateAutoRefresh = computed(() => props.state?.auto_refresh === true)
+// 没有快照就没有可切换的开关；请求在飞时一并禁用，切换结果仍以服务端返回的快照为准。
+const stateAutoRefreshDisabled = computed(() => props.busy || props.stateBusy || !props.state)
 // 记录展开后直接给出捕获的 State 值与这次请求的详情，不再额外折叠。
 const snapshot = computed(() => observation.value?.snapshot)
 function isAccountWideQuotaWindow(window: CredentialQuotaWindowDto): boolean {
@@ -1488,6 +1493,20 @@ function runMenuAction(
             {{ t('group.credentials.subscription.state.title') }}
           </span>
           <div class="subscription-account__state-controls">
+            <label class="subscription-account__state-auto">
+              <input
+                type="checkbox"
+                :checked="stateAutoRefresh"
+                :disabled="stateAutoRefreshDisabled"
+                @change="
+                  emit('set-auto-refresh-state', {
+                    item,
+                    enabled: ($event.target as HTMLInputElement).checked,
+                  })
+                "
+              />
+              <span>{{ t('group.credentials.subscription.autoRefreshState') }}</span>
+            </label>
             <AppSelect
               v-if="stateModels.length > 0"
               size="compact"
@@ -1508,6 +1527,9 @@ function runMenuAction(
             </AppButton>
           </div>
         </div>
+        <p class="subscription-account__state-hint">
+          {{ t('group.credentials.subscription.autoRefreshStateHint') }}
+        </p>
         <div v-if="stateRunningModels.length" class="subscription-account__state-tasks">
           <span class="subscription-account__state-logs-title">
             {{ t('group.credentials.subscription.state.tasks') }}
@@ -2343,6 +2365,31 @@ function runMenuAction(
   display: flex;
   align-items: center;
   gap: var(--space-2);
+}
+/* 自动刷新是凭据级开关：与模型选择、刷新按钮同排，文本即控件说明。 */
+.subscription-account__state-auto {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  color: var(--color-text);
+  font-size: var(--text-label-xs);
+  cursor: pointer;
+}
+.subscription-account__state-auto input {
+  width: 16px;
+  height: 16px;
+  margin: 0;
+  flex: none;
+  accent-color: var(--color-action);
+  cursor: pointer;
+}
+.subscription-account__state-auto:has(input:disabled) {
+  color: var(--color-text-muted);
+  cursor: not-allowed;
+}
+.subscription-account__state-auto input:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
 }
 .subscription-account__state-status {
   display: flex;

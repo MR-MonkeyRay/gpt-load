@@ -46,6 +46,7 @@ import {
   restoreTestedCredential,
   refreshCredentialObservation,
   refreshCredentialState,
+  setCredentialStateAutoRefresh,
   stopCredentialStateRefresh,
   testCredentialConnection,
   updateCredential,
@@ -922,6 +923,32 @@ async function toggleStateRefresh(payload: {
     })
   } finally {
     setPending(id, 'state-refresh', false)
+  }
+}
+
+// 自动刷新是凭据级开关，与所选模型无关：开关状态一律以服务端返回的快照为准。
+async function setStateAutoRefresh(payload: {
+  item: CredentialItemDto
+  enabled: boolean
+}): Promise<void> {
+  const id = payload.item.credential_id
+  if (pending(id)) return
+  feedback.value = ''
+  setPending(id, 'state-auto-refresh', true)
+  try {
+    const state = await setCredentialStateAutoRefresh(client, props.groupId, id, payload.enabled)
+    // 服务端快照属于它自己的模型：只有它正是当前回看的模型时才写回视图，否则回读当前模型。
+    if (credentialStates.value.get(id)?.model === state.model) applyCredentialState(id, state)
+    else await pollCredentialState(id)
+  } catch (cause) {
+    toast.show({
+      message: t(
+        presentSubscriptionErrorKey(cause, 'group.credentials.subscription.autoRefreshStateFailed'),
+      ),
+      tone: 'danger',
+    })
+  } finally {
+    setPending(id, 'state-auto-refresh', false)
   }
 }
 
@@ -2049,7 +2076,10 @@ async function runBatch(
               :detail-loaded="detailLoaded(item.credential_id)"
               :detail-error="detailError(item.credential_id)"
               :state="credentialState(item.credential_id)"
-              :state-busy="pendingOperations.has(operation(item.credential_id, 'state-refresh'))"
+              :state-busy="
+                pendingOperations.has(operation(item.credential_id, 'state-refresh')) ||
+                pendingOperations.has(operation(item.credential_id, 'state-auto-refresh'))
+              "
               :state-loading="stateLoading(item.credential_id)"
               :state-error="stateError(item.credential_id)"
               :state-stopping-models="stateStoppingOf(item.credential_id)"
@@ -2068,6 +2098,7 @@ async function runBatch(
               @download="downloadCredentialFile"
               @refresh-credential="refreshCredentialToken"
               @refresh-state="toggleStateRefresh"
+              @set-auto-refresh-state="setStateAutoRefresh"
               @stop-state="stopStateRefresh"
               @load-state="loadCredentialState"
               @remove="

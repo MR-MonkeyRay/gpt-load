@@ -291,6 +291,8 @@ export interface CredentialStateModelDto {
 /** 各模型已保留的 State，附带所选模型的运行状态与最近刷新记录。 */
 export interface CredentialStateDto {
   required_length: number
+  /** 该凭据是否开启了自动 State 刷新。 */
+  auto_refresh: boolean
   /** 分组已配置的模型，也就是可以刷新 State 的模型；可能为空。 */
   available_models: string[]
   /** 本次回看的模型；请求未指定时由服务端选出默认模型。 */

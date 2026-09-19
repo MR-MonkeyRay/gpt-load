@@ -65,8 +65,13 @@ type TurnStateObservation struct {
 	ObservedAtMS int64
 }
 
-// TurnStateObserver receives complete turn states observed on real responses.
+// TurnStateObserver receives the turn state facts observed on real attempts.
 // Implementations must return immediately and never block the data plane.
 type TurnStateObserver interface {
 	ObserveTurnState(observation TurnStateObservation)
+	// ObserveTurnStateUse reports that one credential served one upstream model
+	// on a real attempt. Turn state is kept valid only for the models a
+	// credential actually serves, so the control plane needs the used set
+	// independently of any state an upstream happened to return.
+	ObserveTurnStateUse(credentialID uint, model string)
 }

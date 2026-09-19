@@ -560,6 +560,8 @@ export default {
           remainingSeconds: '{seconds} 秒',
           expired: '已过期',
           retained: '仅保留长度为 {length} 的 State，记录时间与状态一起保存。',
+          tasks: '刷新任务',
+          cancelRefresh: '停止刷新 {model}',
           history: '刷新记录',
           historyEmpty: '暂无刷新记录',
           loading: '正在读取 State 记录',

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { Info, RefreshCw } from '@lucide/vue'
+import { Info, RefreshCw, X } from '@lucide/vue'
 import { useQuery, useQueryClient } from '@tanstack/vue-query'
 import { computed, onScopeDispose, ref, watch } from 'vue'
 import { useMessageSource } from '@modern/app/messages'
@@ -21,6 +21,7 @@ import {
   AppButton,
   AppCollectionState,
   AppIcon,
+  AppIconButton,
   AppNotice,
   AppOverflowText,
   AppSegmentedField,
@@ -184,6 +185,9 @@ onScopeDispose(() => {
   if (stateTicker !== undefined) clearInterval(stateTicker)
 })
 const stateRunning = computed(() => stateQuery.data.value?.running ?? false)
+// 同一凭据可以同时刷新多个模型：运行态逐模型给出，任务列表据此列出全部在跑的刷新。
+const stateRunningModels = computed(() => stateQuery.data.value?.runningModels ?? [])
+const stateStopping = ref<string[]>([])
 const statePending = ref(false)
 const stateFeedback = ref('')
 const stateController = new AbortController()
@@ -218,35 +222,52 @@ function stateRemaining(expiresAt: number | null): string {
     t('credentialCards.state.remainingSecond', { value: n(seconds) }),
   ].join('')
 }
+// 停止一个模型的刷新运行。返回的快照属于被停止的模型：只有它正是当前回看的
+// 模型时才写回缓存，否则重新回看当前模型，避免把别处的快照当成当前视图。
+async function stopStateRefresh(model: string): Promise<void> {
+  if (!model || stateStopping.value.includes(model)) return
+  stateStopping.value = [...stateStopping.value, model]
+  stateFeedback.value = ''
+  try {
+    const snapshot = await stopCredentialStateRefresh(
+      client,
+      props.group.id,
+      props.row.id,
+      model,
+      stateController.signal,
+    )
+    if (stateController.signal.aborted) return
+    if (snapshot.model === selectedModel.value) cache.setQueryData(stateQueryKey.value, snapshot)
+    else await stateQuery.refetch()
+  } catch {
+    if (!stateController.signal.aborted) stateFeedback.value = t('credentialCards.state.stopFailed')
+  } finally {
+    stateStopping.value = stateStopping.value.filter((value) => value !== model)
+  }
+}
+// 运行中的模型点一下即停止，空闲模型点一下开始刷新。
 async function toggleStateRefresh(): Promise<void> {
   const model = selectedModel.value
   if (statePending.value || !supportsStateRefresh.value || !model) return
-  const stopping = stateRunning.value
+  if (stateRunning.value) {
+    await stopStateRefresh(model)
+    return
+  }
   statePending.value = true
   stateFeedback.value = ''
   try {
-    const snapshot = stopping
-      ? await stopCredentialStateRefresh(
-          client,
-          props.group.id,
-          props.row.id,
-          model,
-          stateController.signal,
-        )
-      : await startCredentialStateRefresh(
-          client,
-          props.group.id,
-          props.row.id,
-          model,
-          stateController.signal,
-        )
+    const snapshot = await startCredentialStateRefresh(
+      client,
+      props.group.id,
+      props.row.id,
+      model,
+      stateController.signal,
+    )
     if (stateController.signal.aborted) return
     cache.setQueryData(stateQueryKey.value, snapshot)
   } catch {
     if (!stateController.signal.aborted) {
-      stateFeedback.value = t(
-        stopping ? 'credentialCards.state.stopFailed' : 'credentialCards.state.refreshFailed',
-      )
+      stateFeedback.value = t('credentialCards.state.refreshFailed')
     }
   } finally {
     statePending.value = false
@@ -431,14 +452,34 @@ useMessageSource(() =>
             variant="outline"
             size="sm"
             :icon="RefreshCw"
-            :loading="statePending"
-            :disabled="statePending || !selectedModel || !stateModelOptions.length"
+            :loading="statePending || stateStopping.includes(selectedModel)"
+            :disabled="
+              statePending ||
+              stateStopping.includes(selectedModel) ||
+              !selectedModel ||
+              !stateModelOptions.length
+            "
             @click="toggleStateRefresh"
           >
             {{
               t(stateRunning ? 'credentialCards.stateStopRefresh' : 'credentialCards.stateRefresh')
             }}
           </AppButton>
+        </div>
+        <div v-if="stateRunningModels.length" class="modern-state-tasks">
+          <span class="modern-state-history-title">{{ t('credentialCards.state.tasks') }}</span>
+          <div v-for="model in stateRunningModels" :key="model" class="modern-state-task">
+            <AppBadge tone="info" size="xs" dot>{{ t('credentialCards.state.running') }}</AppBadge>
+            <AppOverflowText class="modern-state-task-model" :text="model" />
+            <AppIconButton
+              :icon="X"
+              size="xs"
+              :label="t('credentialCards.state.cancelRefresh', { model })"
+              :loading="stateStopping.includes(model)"
+              :disabled="stateStopping.includes(model)"
+              @click="stopStateRefresh(model)"
+            />
+          </div>
         </div>
         <p
           v-if="stateQuery.data.value && !stateModelOptions.length"
@@ -494,72 +535,78 @@ useMessageSource(() =>
             <p v-if="!stateQuery.data.value?.logs.length" class="modern-credential-detail-hint">
               {{ t('credentialCards.state.historyEmpty') }}
             </p>
-            <details
-              v-for="log in stateQuery.data.value?.logs ?? []"
-              :key="log.id"
-              class="modern-state-record"
-            >
-              <summary>
-                <AppBadge :tone="log.status === 'succeeded' ? 'success' : 'danger'" size="xs" dot>{{
-                  t(`credentialCards.state.status.${log.status}`)
-                }}</AppBadge>
-                <AppBadge variant="plain" size="xs">{{
-                  t(`credentialCards.state.source.${log.source}`)
-                }}</AppBadge>
-                <span>{{ credentialTime(log.createdAt, locale) }}</span>
-                <span v-if="log.source === 'refresh'">{{
-                  t('credentialCards.state.attemptOrdinal', { count: n(log.attempts) })
-                }}</span>
-                <span>{{
-                  t('credentialCards.state.stateLength', { length: n(log.stateLength) })
-                }}</span>
-              </summary>
-              <div class="modern-state-record-detail">
-                <dl v-if="log.turnState" class="modern-state-record-grid">
-                  <div>
-                    <dt>{{ t('credentialCards.state.captured') }}</dt>
-                    <dd>
-                      <code class="modern-state-value">{{ log.turnState }}</code>
-                    </dd>
-                  </div>
-                </dl>
-                <div class="modern-state-record-request">
-                  <span class="modern-state-history-title">{{
-                    t('credentialCards.state.request')
+            <div v-else class="modern-state-records">
+              <details
+                v-for="log in stateQuery.data.value?.logs ?? []"
+                :key="log.id"
+                class="modern-state-record"
+              >
+                <summary>
+                  <AppBadge
+                    :tone="log.status === 'succeeded' ? 'success' : 'danger'"
+                    size="xs"
+                    dot
+                    >{{ t(`credentialCards.state.status.${log.status}`) }}</AppBadge
+                  >
+                  <AppOverflowText class="modern-state-record-model" :text="log.model" />
+                  <AppBadge variant="plain" size="xs">{{
+                    t(`credentialCards.state.source.${log.source}`)
+                  }}</AppBadge>
+                  <span>{{ credentialTime(log.createdAt, locale) }}</span>
+                  <span v-if="log.source === 'refresh'">{{
+                    t('credentialCards.state.attemptOrdinal', { count: n(log.attempts) })
                   }}</span>
-                  <dl class="modern-state-record-grid">
+                  <span>{{
+                    t('credentialCards.state.stateLength', { length: n(log.stateLength) })
+                  }}</span>
+                </summary>
+                <div class="modern-state-record-detail">
+                  <dl v-if="log.turnState" class="modern-state-record-grid">
                     <div>
-                      <dt>{{ t('credentialCards.state.model') }}</dt>
-                      <dd>{{ log.model }}</dd>
-                    </div>
-                    <div v-if="log.source === 'refresh'">
-                      <dt>{{ t('credentialCards.state.input') }}</dt>
-                      <dd>{{ log.input }}</dd>
-                    </div>
-                    <div>
-                      <dt>{{ t('credentialCards.state.proxy') }}</dt>
-                      <dd>{{ stateProxyLabel(log.proxyUrl) }}</dd>
-                    </div>
-                    <div>
-                      <dt>{{ t('credentialCards.state.baseURL') }}</dt>
-                      <dd>{{ log.baseUrl || t('credentialCards.state.baseURLDefault') }}</dd>
-                    </div>
-                    <div v-if="log.source === 'refresh'">
-                      <dt>{{ t('credentialCards.state.duration') }}</dt>
-                      <dd>{{ n(log.durationMs) }} ms</dd>
-                    </div>
-                    <div v-if="log.status === 'failed'">
-                      <dt>{{ t('credentialCards.state.result') }}</dt>
-                      <dd>{{ stateFailureLabel(log.errorCode) }}</dd>
-                    </div>
-                    <div v-if="log.source === 'refresh' && log.httpStatus !== null">
-                      <dt>{{ t('credentialCards.state.httpStatus') }}</dt>
-                      <dd>{{ log.httpStatus }}</dd>
+                      <dt>{{ t('credentialCards.state.captured') }}</dt>
+                      <dd>
+                        <code class="modern-state-value">{{ log.turnState }}</code>
+                      </dd>
                     </div>
                   </dl>
+                  <div class="modern-state-record-request">
+                    <span class="modern-state-history-title">{{
+                      t('credentialCards.state.request')
+                    }}</span>
+                    <dl class="modern-state-record-grid">
+                      <div>
+                        <dt>{{ t('credentialCards.state.model') }}</dt>
+                        <dd>{{ log.model }}</dd>
+                      </div>
+                      <div v-if="log.source === 'refresh'">
+                        <dt>{{ t('credentialCards.state.input') }}</dt>
+                        <dd>{{ log.input }}</dd>
+                      </div>
+                      <div>
+                        <dt>{{ t('credentialCards.state.proxy') }}</dt>
+                        <dd>{{ stateProxyLabel(log.proxyUrl) }}</dd>
+                      </div>
+                      <div>
+                        <dt>{{ t('credentialCards.state.baseURL') }}</dt>
+                        <dd>{{ log.baseUrl || t('credentialCards.state.baseURLDefault') }}</dd>
+                      </div>
+                      <div v-if="log.source === 'refresh'">
+                        <dt>{{ t('credentialCards.state.duration') }}</dt>
+                        <dd>{{ n(log.durationMs) }} ms</dd>
+                      </div>
+                      <div v-if="log.status === 'failed'">
+                        <dt>{{ t('credentialCards.state.result') }}</dt>
+                        <dd>{{ stateFailureLabel(log.errorCode) }}</dd>
+                      </div>
+                      <div v-if="log.source === 'refresh' && log.httpStatus !== null">
+                        <dt>{{ t('credentialCards.state.httpStatus') }}</dt>
+                        <dd>{{ log.httpStatus }}</dd>
+                      </div>
+                    </dl>
+                  </div>
                 </div>
-              </div>
-            </details>
+              </details>
+            </div>
           </div>
         </template>
       </section>
@@ -693,10 +740,44 @@ useMessageSource(() =>
   color: var(--modern-muted);
   font-size: var(--modern-font-size-small);
 }
-.modern-state-record {
+.modern-state-tasks {
+  display: grid;
+  gap: var(--modern-space-1-5);
+  min-width: 0;
+}
+.modern-state-task {
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr) max-content;
+  align-items: center;
+  gap: var(--modern-space-2);
+  min-width: 0;
+  padding: var(--modern-space-1) var(--modern-space-2);
   border: var(--modern-line-width) solid var(--modern-border);
   border-radius: var(--modern-radius-control);
+}
+.modern-state-task-model {
+  color: var(--modern-text);
+  font-size: var(--modern-font-size-small);
+  font-weight: var(--modern-weight-semibold);
+}
+/* 全部刷新记录共用一个框：记录之间只用分隔线，不再各自成框。 */
+.modern-state-records {
+  display: grid;
+  min-width: 0;
+  border: var(--modern-line-width) solid var(--modern-border);
+  border-radius: var(--modern-radius-control);
+}
+.modern-state-record {
   padding: var(--modern-space-2) var(--modern-space-3);
+  min-width: 0;
+}
+.modern-state-record + .modern-state-record {
+  border-top: var(--modern-line-width) solid var(--modern-border);
+}
+.modern-state-record-model {
+  flex: 0 1 auto;
+  color: var(--modern-text);
+  font-weight: var(--modern-weight-semibold);
 }
 .modern-state-record > summary {
   display: flex;

@@ -79,6 +79,35 @@ func TestTurnStateInjectionFollowsTheResolvedModel(t *testing.T) {
 		t.Fatal("attempt without a captured state reported a replay")
 	}
 
+	// 下游客户端自带的 state 属于它自己的会话，可能由另一个账号签发：既不能透传，
+	// 也不能被当成已回放的捕获。
+	leaked := base()
+	leaked.UpstreamModelID = "gpt-6-astra"
+	leaked.Request.Header.Set(execution.CodexTurnStateHeader, "client-state")
+	spec, err = newExecutionAttemptSpec(leaked)
+	if err != nil {
+		t.Fatalf("spec error = %v", err)
+	}
+	if got := spec.Header.Get(execution.CodexTurnStateHeader); got != "" {
+		t.Fatalf("client turn state was forwarded: %q", got)
+	}
+	if spec.TurnStateReplayed {
+		t.Fatal("client turn state was mistaken for a replayed capture")
+	}
+
+	// 客户端自带的值与凭据捕获值同时存在时，只有捕获值能到上游。
+	owned := base()
+	owned.UpstreamModelID = "gpt-6-astra"
+	owned.Request.Header.Set(execution.CodexTurnStateHeader, "client-state")
+	owned.CredentialTurnState = "state-value"
+	spec, err = newExecutionAttemptSpec(owned)
+	if err != nil {
+		t.Fatalf("spec error = %v", err)
+	}
+	if got := spec.Header.Get(execution.CodexTurnStateHeader); got != "state-value" {
+		t.Fatalf("captured state did not win: %q", got)
+	}
+
 	if strings.TrimSpace(execution.CodexTurnStateModel) != "gpt-6-astra" || execution.CodexTurnStateLength != 292 {
 		t.Fatalf("constants drifted: %q/%d", execution.CodexTurnStateModel, execution.CodexTurnStateLength)
 	}

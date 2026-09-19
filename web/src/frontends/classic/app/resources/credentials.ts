@@ -193,6 +193,7 @@ const stateRefreshFields = [
   'available_models',
   'model',
   'running',
+  'running_models',
   'states',
   'logs',
 ] as const
@@ -548,6 +549,7 @@ function projectCredentialStateRefresh(value: unknown): CredentialStateDto {
     available_models: projectArray(record.available_models, (model) => projectString(model)),
     model: projectString(record.model, { allowEmpty: true }),
     running: projectBoolean(record.running),
+    running_models: projectArray(record.running_models, (model) => projectString(model)),
     states: projectArray(record.states, projectCredentialStateModel),
     logs: projectArray(record.logs, projectCredentialStateRecord),
   }

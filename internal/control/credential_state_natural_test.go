@@ -3,6 +3,7 @@ package control
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -201,6 +202,51 @@ func TestObserveTurnStateDropsUnusableObservationsImmediately(t *testing.T) {
 		}
 		if capture := turnStateCapture(t, fixture, credentialID, stateRefreshTestModel); capture != nil {
 			t.Fatalf("incomplete state was retained: %#v", capture)
+		}
+	})
+
+	// 上游线上签发的另一种令牌长度（实测 312）不是本产品要的值：既不落库，也不
+	// 占用捕获名额，随后的完整长度值仍必须被采下。
+	t.Run("rotated length does not claim the capture", func(t *testing.T) {
+		fixture, _, credentialID := newStateRefreshFixture(t)
+
+		observeCompleteTurnState(t, fixture, credentialID, stateRefreshTestModel, strings.Repeat("s", 312))
+		waitNaturalStateCaptureSettled(t, fixture.service)
+
+		if records := stateRefreshRecords(t, fixture, credentialID, stateRefreshTestModel); len(records) != 0 {
+			t.Fatalf("rotated length was recorded: %#v", records)
+		}
+		if capture := turnStateCapture(t, fixture, credentialID, stateRefreshTestModel); capture != nil {
+			t.Fatalf("rotated length was retained: %#v", capture)
+		}
+
+		complete := turnstatetest.Value(6)
+		observeCompleteTurnState(t, fixture, credentialID, stateRefreshTestModel, complete)
+		waitNaturalStateCaptureSettled(t, fixture.service)
+
+		if capture := turnStateCapture(t, fixture, credentialID, stateRefreshTestModel); capture == nil || capture.TurnState != complete {
+			t.Fatalf("complete state after a rotated one = %#v", capture)
+		}
+	})
+
+	// 有效期到点后捕获作废，下一次自然捕获必须重新落库，而不是被旧记录挡住。
+	t.Run("expired capture is replaced", func(t *testing.T) {
+		fixture, _, credentialID := newStateRefreshFixture(t)
+		now := fixture.service.now()
+		if !fixture.registry.SetCredentialTurnState(credentialID, stateRefreshTestModel, turnstatetest.Value(7), now.Add(-2*time.Hour).UnixMilli()) {
+			t.Fatal("SetCredentialTurnState() did not publish the value")
+		}
+
+		fresh := turnstatetest.Value(8)
+		observeCompleteTurnState(t, fixture, credentialID, stateRefreshTestModel, fresh)
+		waitNaturalStateCaptureSettled(t, fixture.service)
+
+		if got := credentialTurnState(t, fixture, credentialID, stateRefreshTestModel, now); got != fresh {
+			t.Fatalf("expired capture was not replaced: %q", got)
+		}
+		records := stateRefreshRecords(t, fixture, credentialID, stateRefreshTestModel)
+		if len(records) != 1 || records[0].TurnState != fresh {
+			t.Fatalf("records after expiry = %#v", records)
 		}
 	})
 

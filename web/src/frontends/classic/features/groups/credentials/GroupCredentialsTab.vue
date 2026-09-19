@@ -140,6 +140,8 @@ const detailErrors = ref(new Map<number, string>())
 const credentialStates = ref(new Map<number, CredentialStateDto>())
 const stateErrors = ref(new Map<number, string>())
 const stateLoadingIDs = ref(new Set<number>())
+// 逐个模型的取消入口：哪个模型正在停止由这里跟踪，卡片只负责展示。
+const stateStoppingModels = ref(new Map<number, string[]>())
 const statePollTimers = new Map<number, number>()
 // 同一凭据只展示一份快照：新的读取取代在途读取，避免切换模型时旧快照回填。
 const stateReadControllers = new Map<number, AbortController>()
@@ -583,12 +585,23 @@ function stopStatePolling(id: number): void {
 function stopAllStatePolling(): void {
   for (const id of [...statePollTimers.keys()]) stopStatePolling(id)
 }
+function stateStoppingOf(id: number): string[] {
+  return stateStoppingModels.value.get(id) ?? []
+}
+function setStateStopping(id: number, model: string, stopping: boolean): void {
+  const next = new Map(stateStoppingModels.value)
+  const models = (next.get(id) ?? []).filter((value) => value !== model)
+  if (stopping) models.push(model)
+  if (models.length) next.set(id, models)
+  else next.delete(id)
+  stateStoppingModels.value = next
+}
 function applyCredentialState(id: number, state: CredentialStateDto): void {
   const next = new Map(credentialStates.value)
   next.set(id, state)
   credentialStates.value = next
-  // 快照里的运行状态逐模型给出：只要还有模型在刷新就继续重读，其他模型的进度才跟得上。
-  const anyRunning = state.running || state.states.some((entry) => entry.running)
+  // 快照逐模型给出全部在跑的刷新：只要还有模型在刷新就继续重读，其他模型的进度才跟得上。
+  const anyRunning = state.running || state.running_models.length > 0
   if (!anyRunning) {
     stopStatePolling(id)
     return
@@ -909,6 +922,36 @@ async function toggleStateRefresh(payload: {
     })
   } finally {
     setPending(id, 'state-refresh', false)
+  }
+}
+
+// 刷新任务的取消入口：按模型停止该模型的刷新运行。返回的快照属于被停止的模型，
+// 只有它正是当前回看的模型时才写回视图，否则回读当前模型，避免视图被切走。
+async function stopStateRefresh(payload: {
+  item: CredentialItemDto
+  model: string
+}): Promise<void> {
+  const id = payload.item.credential_id
+  if (pending(id) || stateStoppingOf(id).includes(payload.model)) return
+  feedback.value = ''
+  setStateStopping(id, payload.model, true)
+  try {
+    const stopped = await stopCredentialStateRefresh(client, props.groupId, id, payload.model)
+    if (credentialStates.value.get(id)?.model === stopped.model) applyCredentialState(id, stopped)
+    else await pollCredentialState(id)
+    toast.show({
+      message: t('group.credentials.subscription.stopRefreshStateSucceeded'),
+      tone: 'success',
+    })
+  } catch (cause) {
+    toast.show({
+      message: t(
+        presentSubscriptionErrorKey(cause, 'group.credentials.subscription.stopRefreshStateFailed'),
+      ),
+      tone: 'danger',
+    })
+  } finally {
+    setStateStopping(id, payload.model, false)
   }
 }
 
@@ -2009,6 +2052,7 @@ async function runBatch(
               :state-busy="pendingOperations.has(operation(item.credential_id, 'state-refresh'))"
               :state-loading="stateLoading(item.credential_id)"
               :state-error="stateError(item.credential_id)"
+              :state-stopping-models="stateStoppingOf(item.credential_id)"
               :observation-error="observationError(item.credential_id)"
               :channel-icon="channelDescriptor?.icon"
               :channel-mark="channelDescriptor?.mark"
@@ -2024,6 +2068,7 @@ async function runBatch(
               @download="downloadCredentialFile"
               @refresh-credential="refreshCredentialToken"
               @refresh-state="toggleStateRefresh"
+              @stop-state="stopStateRefresh"
               @load-state="loadCredentialState"
               @remove="
                 deleteTarget = {

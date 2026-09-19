@@ -453,7 +453,7 @@ func TestWebsocketPreparationPreservesExplicitControls(t *testing.T) {
 				}
 				selection.Group.ParameterOverrides = rules
 			}
-			payload, _, err := prepareWebsocketPayload(body, original, selection)
+			payload, _, err := prepareWebsocketPayload(body, original, selection, "")
 			if (err != nil) != test.reject {
 				t.Fatalf("reject=%t err=%v payload=%s", test.reject, err, payload)
 			}
@@ -463,6 +463,47 @@ func TestWebsocketPreparationPreservesExplicitControls(t *testing.T) {
 				if req["type"] != nil || req["stream"] != nil || req["model"] != "upstream" || req["generate"] != false || req["previous_response_id"] != "resp_parent" {
 					t.Fatalf("session create-body contract violated: %s", payload)
 				}
+			}
+		})
+	}
+}
+
+// 下游客户端自带的 state 属于它自己的会话：请求体元数据里的值必须被捕获值替换，
+// 没有捕获值时删除，让上游按无 state 的请求重新签发。其余元数据不受影响。
+func TestWebsocketPreparationOwnsClientMetadataTurnState(t *testing.T) {
+	body := []byte(`{"type":"response.create","model":"public","input":"hello","client_metadata":{"x-codex-turn-state":"client-state","session_id":"s1"}}`)
+	original, err := inspectWebsocketRequest(body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	upstreamModel := "upstream"
+	selection := scheduler.Selection{UpstreamModelID: &upstreamModel}
+	captured := strings.Repeat("s", execution.CodexTurnStateLength)
+
+	for _, test := range []struct {
+		name  string
+		state string
+		want  any
+	}{
+		{name: "captured state replaces the client value", state: captured, want: captured},
+		{name: "no capture drops the client value"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			payload, _, err := prepareWebsocketPayload(body, original, selection, test.state)
+			if err != nil {
+				t.Fatalf("prepareWebsocketPayload() error = %v", err)
+			}
+			var request struct {
+				ClientMetadata map[string]any `json:"client_metadata"`
+			}
+			if err := json.Unmarshal(payload, &request); err != nil {
+				t.Fatalf("decode payload %s: %v", payload, err)
+			}
+			if got := request.ClientMetadata["x-codex-turn-state"]; got != test.want {
+				t.Fatalf("client_metadata turn state = %#v, want %#v (payload %s)", got, test.want, payload)
+			}
+			if request.ClientMetadata["session_id"] != "s1" {
+				t.Fatalf("unrelated client metadata was dropped: %s", payload)
 			}
 		})
 	}

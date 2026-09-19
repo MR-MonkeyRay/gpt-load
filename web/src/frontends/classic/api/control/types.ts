@@ -297,6 +297,8 @@ export interface CredentialStateDto {
   model: string
   /** 本次回看的模型是否有后台刷新在运行。 */
   running: boolean
+  /** 当前全部在跑刷新的模型：界面据此列出刷新任务并逐个取消。 */
+  running_models: string[]
   states: CredentialStateModelDto[]
   logs: CredentialStateRecordDto[]
 }

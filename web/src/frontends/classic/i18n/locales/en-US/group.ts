@@ -580,6 +580,8 @@ export default {
           expired: 'Expired',
           retained:
             'Only a {length}-character state is retained, and the record time is stored with it.',
+          tasks: 'Refresh tasks',
+          cancelRefresh: 'Stop refreshing {model}',
           history: 'Refresh records',
           historyEmpty: 'No refresh record yet',
           loading: 'Loading state records',

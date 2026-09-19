@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"math/rand/v2"
 	"net/http"
+	"sort"
 	"strings"
 	"time"
 
@@ -108,8 +109,7 @@ type CredentialStateModelResponse struct {
 }
 
 // CredentialStateResponse is the stored turn state of every refreshed model of
-// one credential, together with the recent refresh records of the selected
-// model.
+// one credential, together with the recent refresh records of the credential.
 type CredentialStateResponse struct {
 	// RequiredLength 是保留状态所需的完整长度，供界面说明保留规则。
 	RequiredLength int `json:"required_length"`
@@ -118,9 +118,11 @@ type CredentialStateResponse struct {
 	// Model 是本次回看的模型；请求未指定时由服务端选出默认模型。
 	Model string `json:"model"`
 	// Running 表示 Model 当前是否有后台刷新在运行。
-	Running bool                                `json:"running"`
-	States  []CredentialStateModelResponse      `json:"states"`
-	Logs    []CredentialStateRefreshLogResponse `json:"logs"`
+	Running bool `json:"running"`
+	// RunningModels 是该凭据当前全部在跑刷新的模型，供界面列出刷新任务并逐个取消。
+	RunningModels []string                            `json:"running_models"`
+	States        []CredentialStateModelResponse      `json:"states"`
+	Logs          []CredentialStateRefreshLogResponse `json:"logs"`
 }
 
 // stateRefreshKey identifies one background refresh run: turn state is bound to
@@ -157,7 +159,8 @@ func (err stateRefreshLengthError) Error() string {
 
 // GetCredentialState reads the turn state retained for every refreshed model,
 // each capture time and replay expiry, whether a refresh is running, and the
-// recent refresh records of one subscription credential and model.
+// recent refresh records of one subscription credential. Records span every
+// model of the credential: a refresh run of any model appends to the same list.
 func (s *Service) GetCredentialState(
 	ctx context.Context,
 	groupID uint,
@@ -173,9 +176,14 @@ func (s *Service) GetCredentialState(
 	response := CredentialStateResponse{
 		RequiredLength:  execution.CodexTurnStateLength,
 		AvailableModels: []string{},
+		RunningModels:   []string{},
 		States:          []CredentialStateModelResponse{},
 		Logs:            []CredentialStateRefreshLogResponse{},
 	}
+	for name := range runningModels {
+		response.RunningModels = append(response.RunningModels, name)
+	}
+	sort.Strings(response.RunningModels)
 	err := s.withReadSnapshot(ctx, func(tx *gorm.DB) error {
 		group, err := s.loadStateRefreshGroup(tx, groupID)
 		if err != nil {
@@ -199,7 +207,7 @@ func (s *Service) GetCredentialState(
 			response.States = append(response.States, credentialStateModelResponse(row))
 		}
 		var logs []models.CredentialStateRefreshLog
-		if err := tx.Where("group_id = ? AND credential_id = ? AND model = ?", groupID, credentialID, response.Model).
+		if err := tx.Where("group_id = ? AND credential_id = ?", groupID, credentialID).
 			Order("created_at_ms DESC").Order("id DESC").Limit(stateRefreshLogLimit).Find(&logs).Error; err != nil {
 			return err
 		}
@@ -389,8 +397,9 @@ func (s *Service) ObserveTurnState(observation execution.TurnStateObservation) {
 	if observation.CredentialID == 0 || observation.IdentityGeneration == 0 || observation.Model == "" {
 		return
 	}
-	// 自然采集按令牌本身判定完整性，不绑定手动刷新的固定长度。
-	if _, usable := execution.UsableTurnState(observation.TurnState); !usable {
+	// 上游自签发的 state 只有正好是约定长度时才是本产品要的值：其它长度
+	// （例如上游当前签发的更长令牌）既不捕获也不占用捕获名额。
+	if _, complete := execution.CompleteTurnState(observation.TurnState); !complete {
 		return
 	}
 	key := stateRefreshKey{credentialID: observation.CredentialID, model: observation.Model}

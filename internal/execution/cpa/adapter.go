@@ -100,8 +100,8 @@ func (a *Adapter) SetTurnStateObserver(observer execution.TurnStateObserver) {
 
 // recordObservedTurnState reports a complete turn state the upstream returned on
 // a real attempt. A replayed state stays authoritative for its whole lifetime,
-// so only an attempt that carried no state can produce a new capture; an
-// incomplete or empty header is never a capture.
+// so only an attempt that carried no state can produce a new capture; a header
+// of any other length, including a short one, is never a capture.
 func (a *Adapter) recordObservedTurnState(
 	spec execution.AttemptSpec,
 	baseURL string,
@@ -112,9 +112,9 @@ func (a *Adapter) recordObservedTurnState(
 	if a == nil || a.turnStates == nil || spec.TurnStateReplayed {
 		return
 	}
-	value, usable := execution.UsableTurnState(turnState)
+	value, complete := execution.CompleteTurnState(turnState)
 	model := execution.TurnStateModel(spec.UpstreamModel, spec.ClientModel)
-	if !usable || model == "" || spec.Credential.ID == 0 || spec.Credential.IdentityGeneration == 0 {
+	if !complete || model == "" || spec.Credential.ID == 0 || spec.Credential.IdentityGeneration == 0 {
 		return
 	}
 	a.turnStates.ObserveTurnState(execution.TurnStateObservation{

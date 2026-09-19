@@ -584,6 +584,8 @@ export default {
           remainingSeconds: '{seconds}秒',
           expired: '期限切れ',
           retained: '長さ {length} の State のみを保持し、記録時刻も併せて保存します。',
+          tasks: '更新タスク',
+          cancelRefresh: '{model} の更新を停止',
           history: '更新履歴',
           historyEmpty: '更新履歴はまだありません',
           loading: 'State 記録を読み込み中',

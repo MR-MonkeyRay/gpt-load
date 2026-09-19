@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -552,17 +553,18 @@ func TestStateRefreshDelayPolicy(t *testing.T) {
 	}
 }
 
-// 详情一次只回看最新的十条记录。
+// 详情一次只回看最新的十条记录，且记录是凭据级的：两个模型的记录共用这一个上限。
 func TestCredentialStateLogLimitKeepsNewestRecords(t *testing.T) {
 	t.Parallel()
 
 	fixture, groupID, credentialID := newStateRefreshFixture(t)
 	base := int64(1_800_000_000_000)
+	modelsOf := [2]string{stateRefreshTestModel, stateRefreshOtherModel}
 	for index := range 12 {
 		row := models.CredentialStateRefreshLog{
 			GroupID: groupID, CredentialID: credentialID,
 			Status: models.CredentialStateRefreshSucceeded, StateLength: execution.CodexTurnStateLength,
-			Attempts: 1, Model: stateRefreshTestModel, Input: stateRefreshInput,
+			Attempts: 1, Model: modelsOf[index%2], Input: stateRefreshInput,
 			CreatedAtMS: base + int64(index),
 		}
 		if err := fixture.db.Create(&row).Error; err != nil {
@@ -577,6 +579,14 @@ func TestCredentialStateLogLimitKeepsNewestRecords(t *testing.T) {
 		t.Fatalf("refresh records = %d", len(state.Logs))
 	}
 	if state.Logs[0].CreatedAtMS != base+11 || state.Logs[len(state.Logs)-1].CreatedAtMS != base+2 {
+		t.Fatalf("refresh records = %#v", state.Logs)
+	}
+	// 两个模型的记录都进同一份列表：最新十条里两种模型都在。
+	recorded := make(map[string]bool, 2)
+	for _, record := range state.Logs {
+		recorded[record.Model] = true
+	}
+	if !recorded[stateRefreshTestModel] || !recorded[stateRefreshOtherModel] {
 		t.Fatalf("refresh records = %#v", state.Logs)
 	}
 }
@@ -612,7 +622,8 @@ func TestCredentialStateRefreshIsolatesModels(t *testing.T) {
 	if _, err := fixture.service.StartCredentialStateRefresh(t.Context(), groupID, credentialID, stateRefreshOtherModel); err != nil {
 		t.Fatalf("StartCredentialStateRefresh() error = %v", err)
 	}
-	// 两个模型同时刷新：各自报告运行态，记录也按模型隔离。
+	// 两个模型同时刷新：各自报告运行态，凭据级快照列出全部在跑刷新的模型，
+	// 刷新记录不再按模型过滤，界面靠记录自带的模型名区分。
 	first, err := fixture.service.GetCredentialState(t.Context(), groupID, credentialID, stateRefreshTestModel)
 	if err != nil {
 		t.Fatalf("GetCredentialState() error = %v", err)
@@ -623,6 +634,10 @@ func TestCredentialStateRefreshIsolatesModels(t *testing.T) {
 	}
 	if !first.Running || !second.Running || first.Model != stateRefreshTestModel || second.Model != stateRefreshOtherModel {
 		t.Fatalf("running snapshots = %#v / %#v", first, second)
+	}
+	wantRunning := []string{stateRefreshOtherModel, stateRefreshTestModel}
+	if !slices.Equal(first.RunningModels, wantRunning) || !slices.Equal(second.RunningModels, wantRunning) {
+		t.Fatalf("running models = %#v / %#v, want %#v", first.RunningModels, second.RunningModels, wantRunning)
 	}
 	close(release)
 	waitStateRefreshIdle(t, fixture.service, credentialID, stateRefreshTestModel)
@@ -653,8 +668,16 @@ func TestCredentialStateRefreshIsolatesModels(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetCredentialState() error = %v", err)
 	}
-	if len(state.States) != 2 || len(state.Logs) != 1 || state.Logs[0].Model != stateRefreshOtherModel {
+	if len(state.States) != 2 || len(state.RunningModels) != 0 {
 		t.Fatalf("state payload = %#v", state)
+	}
+	// 记录是凭据级的：两个模型各自的一次捕获都在同一份列表里。
+	recorded := make(map[string]bool, len(state.Logs))
+	for _, record := range state.Logs {
+		recorded[record.Model] = true
+	}
+	if len(state.Logs) != 2 || !recorded[stateRefreshTestModel] || !recorded[stateRefreshOtherModel] {
+		t.Fatalf("refresh records = %#v", state.Logs)
 	}
 	for model, value := range captures {
 		if entry := modelState(t, state, model); entry.TurnState != value || entry.StateLength != execution.CodexTurnStateLength {

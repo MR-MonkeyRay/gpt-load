@@ -746,6 +746,9 @@ func newExecutionAttemptSpec(input ForwardInput) (execution.AttemptSpec, error) 
 	}
 	headers := cloneEndToEndHeaders(input.Request.Header)
 	removeDownstreamCredentials(headers)
+	// 下游客户端自带的 state 属于它自己的会话：签发它的可能是另一个账号，复用
+	// 会破坏"state 只属于捕获它的账号和模型"。注入只来自凭据自己的捕获值。
+	headers.Del(execution.CodexTurnStateHeader)
 	for name, value := range input.Group.HeaderRules.Set {
 		headers.Set(name, strings.ReplaceAll(value, "${API_KEY}", input.APIKey))
 	}

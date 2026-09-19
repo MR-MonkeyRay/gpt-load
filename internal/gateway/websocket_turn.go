@@ -287,7 +287,9 @@ func (s *websocketConnection) executeTurn(turn websocketTurn) {
 			}
 			ref = query.AllowedCredentialRefs[selection.CredentialID]
 		}
-		payload, effective, err := prepareWebsocketPayload(turn.body, original, selection)
+		// 捕获值在组装请求体与尝试 spec 之前解析一次，两者必须携带同一个 state。
+		credentialTurnState := ref.TurnStateFor(execution.TurnStateModel(optionalModelValue(selection.UpstreamModelID), model), h.now())
+		payload, effective, err := prepareWebsocketPayload(turn.body, original, selection, credentialTurnState)
 		if err != nil {
 			reject(reasonParameterOverrideUnavailable)
 			return
@@ -333,10 +335,7 @@ func (s *websocketConnection) executeTurn(turn websocketTurn) {
 		parsed.Header.Del("Origin")
 		input := ForwardInput{Dialect: dialect.NewOpenAIResponses(), ObserveUsage: effective.metadata.ObserveUsage, Group: selection.Group, APIKey: credential.apiKey, CredentialSecrets: credential.secrets, Request: parsed, ExternalModel: model, UpstreamModelID: optionalModelValue(selection.UpstreamModelID), RequestID: id, AttemptID: id + ":" + strconv.Itoa(sequence), AttemptSequence: uint32(sequence), ClientProtocol: protocol.OpenAIResponses, Operation: execution.OperationResponsesCreate, RouteRequirement: execution.RouteRequirementNative, ResponsesStorePreference: original.metadata.ResponsesStorePreference, ChannelID: string(selection.ChannelID), RouteMode: execution.RouteNative, TargetConfig: selection.ResolvedTarget.TargetConfig, Credential: execution.NewCredentialSnapshot(ref.ID, ref.Version, ref.IdentityGeneration, credential.payload), Proxy: proxy, ProxyFingerprint: fingerprint}
 		input.ForceCredentialRefresh = forceCredentialRefresh
-		input.CredentialTurnState = ref.TurnStateFor(
-			execution.TurnStateModel(optionalModelValue(selection.UpstreamModelID), model),
-			h.now(),
-		)
+		input.CredentialTurnState = credentialTurnState
 		spec, err := newExecutionAttemptSpec(input)
 		if err != nil {
 			reject(reasonInvalidProtocolRequest)
@@ -535,7 +534,7 @@ func sameWebsocketIdentity(a, b state.CredentialRef) bool {
 	return a.ID == b.ID && a.GroupID == b.GroupID && a.IdentityGeneration == b.IdentityGeneration
 }
 
-func prepareWebsocketPayload(body []byte, original websocketRequest, selection scheduler.Selection) ([]byte, websocketRequest, error) {
+func prepareWebsocketPayload(body []byte, original websocketRequest, selection scheduler.Selection, turnState string) ([]byte, websocketRequest, error) {
 	effectiveBody, _, err := selection.Group.ParameterOverrides.Apply(protocol.OpenAIResponses, execution.OperationResponsesCreate, *original.metadata.Model, body)
 	if err != nil {
 		return nil, original, err
@@ -563,11 +562,54 @@ func prepareWebsocketPayload(body []byte, original websocketRequest, selection s
 			delete(effective.fields, key)
 		}
 	}
+	applyWebsocketTurnState(effective.fields, turnState)
 	payload, err := json.Marshal(effective.fields)
 	if len(payload) > 10<<20 {
 		return nil, original, ErrUpstreamProtocol
 	}
 	return payload, effective, err
+}
+
+// applyWebsocketTurnState 把捕获的 state 放进 WS 请求体的 client_metadata：连接
+// 复用后握手早已完成，上游只能从每条消息的元数据里读到本轮 state。下游客户端自带
+// 的 state 属于它自己的会话（签发它的可能是另一个账号），必须被替换而不是透传。
+// 没有捕获值时就地删除，让上游按无 state 的请求重新签发。
+func applyWebsocketTurnState(fields map[string]json.RawMessage, turnState string) {
+	metadata := map[string]json.RawMessage{}
+	raw, exists := fields["client_metadata"]
+	if exists && !bytes.Equal(raw, []byte("null")) {
+		if json.Unmarshal(raw, &metadata) != nil || metadata == nil {
+			// 元数据不是对象：上游自己会拒绝，这里不猜测它的结构。
+			return
+		}
+	}
+	replaced := false
+	for key := range metadata {
+		if strings.EqualFold(key, execution.CodexTurnStateHeader) {
+			delete(metadata, key)
+			replaced = true
+		}
+	}
+	if turnState != "" {
+		encoded, err := json.Marshal(turnState)
+		if err != nil {
+			return
+		}
+		metadata[strings.ToLower(execution.CodexTurnStateHeader)] = encoded
+		replaced = true
+	}
+	if !replaced {
+		return
+	}
+	if len(metadata) == 0 {
+		delete(fields, "client_metadata")
+		return
+	}
+	encoded, err := json.Marshal(metadata)
+	if err != nil {
+		return
+	}
+	fields["client_metadata"] = encoded
 }
 
 type websocketCancelCloser struct {

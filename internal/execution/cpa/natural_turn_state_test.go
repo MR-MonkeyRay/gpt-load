@@ -35,15 +35,16 @@ func completeTurnState() string {
 	return strings.Repeat("s", execution.CodexTurnStateLength)
 }
 
-// rotatedTurnState 是上游调整令牌长度后真实出现的形状（生产已观察到 312）。
+// rotatedTurnState 是上游签发的另一种令牌形状（生产实测 312 字节）：长度不是本
+// 产品约定的值，任何载体上的这种值都不是捕获。
 func rotatedTurnState() string {
 	return strings.Repeat("s", 312)
 }
 
 // An attempt that carried no state reports the complete state its upstream
 // returned, so the control plane can retain it for the same credential and
-// model. A replayed state, an incomplete header, and a header-less attempt never
-// report anything.
+// model. A replayed state, a header of any other length, and a header-less
+// attempt never report anything.
 func TestAdapterReportsNaturalTurnStateOnlyForAttemptsWithoutAReplayedState(t *testing.T) {
 	for _, test := range []struct {
 		name      string
@@ -52,7 +53,7 @@ func TestAdapterReportsNaturalTurnStateOnlyForAttemptsWithoutAReplayedState(t *t
 		want      string
 	}{
 		{name: "complete state", turnState: completeTurnState(), want: completeTurnState()},
-		{name: "upstream rotated length", turnState: rotatedTurnState(), want: rotatedTurnState()},
+		{name: "upstream rotated length", turnState: rotatedTurnState()},
 		{name: "incomplete state", turnState: "short"},
 		{name: "missing state"},
 		{name: "replayed state", turnState: completeTurnState(), replayed: true},
@@ -178,17 +179,19 @@ func (session *turnStateEventSession) ExecuteTurn(ctx context.Context, _ []byte,
 }
 
 // WS 上游把 state 放在元数据事件里，观察包装必须在转发事件的同时采下它，
-// 且已回放 state 的尝试不得再次上报。
+// 且已回放 state 的尝试不得再次上报；长度不符的元数据值同样不上报。
 func TestObservedWebsocketSessionReportsTurnStateFromMetadataEvents(t *testing.T) {
 	state := completeTurnState()
 	event := []byte(`{"type":"codex.response.metadata","headers":{"x-codex-turn-state":"` + state + `"}}`)
 	for _, test := range []struct {
 		name     string
+		event    []byte
 		replayed bool
 		want     bool
 	}{
-		{name: "natural capture", want: true},
-		{name: "replayed state", replayed: true},
+		{name: "natural capture", event: event, want: true},
+		{name: "rotated length", event: []byte(`{"type":"codex.response.metadata","headers":{"x-codex-turn-state":"` + rotatedTurnState() + `"}}`)},
+		{name: "replayed state", event: event, replayed: true},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			adapter, _, _, keyService, row := newAdapterFixture(t, credentialJSON("access", "refresh", time.Now().Add(time.Hour)))
@@ -197,13 +200,13 @@ func TestObservedWebsocketSessionReportsTurnStateFromMetadataEvents(t *testing.T
 			spec := validSpec(t, row, keyService)
 			spec.TurnStateReplayed = test.replayed
 			session := &observedWebsocketSession{
-				WebsocketSession: &turnStateEventSession{event: event},
+				WebsocketSession: &turnStateEventSession{event: test.event},
 				adapter:          adapter, turnStateSpec: spec, baseURL: "https://upstream.example", proxyURL: "direct",
 			}
 			forwarded := 0
 			session.ExecuteTurn(t.Context(), nil, func(_ context.Context, payload []byte) error {
 				forwarded++
-				if !bytes.Equal(payload, event) {
+				if !bytes.Equal(payload, test.event) {
 					t.Fatalf("forwarded event = %s", payload)
 				}
 				return nil
@@ -230,6 +233,30 @@ func TestObservedWebsocketSessionReportsTurnStateFromMetadataEvents(t *testing.T
 				t.Fatalf("observation = %#v", observation)
 			}
 		})
+	}
+}
+
+// 首次使用 WS 连接：握手响应头先到，可能带着另一种长度的令牌；真正的值在随后的
+// 元数据事件里。长度不符的握手值必须被丢弃，否则它会占用捕获名额，首次 WS 使用
+// 就永远拿不到 state。
+func TestObservedWebsocketSessionIgnoresRotatedHandshakeStateBeforeMetadataEvent(t *testing.T) {
+	adapter, _, _, keyService, row := newAdapterFixture(t, credentialJSON("access", "refresh", time.Now().Add(time.Hour)))
+	observer := &recordingTurnStateObserver{}
+	adapter.SetTurnStateObserver(observer)
+	state := completeTurnState()
+	session := &observedWebsocketSession{
+		WebsocketSession: &turnStateEventSession{
+			event: []byte(`{"type":"codex.response.metadata","headers":{"x-codex-turn-state":"` + state + `"}}`),
+		},
+		adapter: adapter, turnStateSpec: validSpec(t, row, keyService),
+		baseURL: "https://upstream.example", proxyURL: "direct",
+	}
+	session.observeHeaders(http.Header{execution.CodexTurnStateHeader: {rotatedTurnState()}}, time.Now())
+	session.ExecuteTurn(t.Context(), nil, func(context.Context, []byte) error { return nil })
+
+	observations := observer.recorded()
+	if len(observations) != 1 || observations[0].TurnState != state {
+		t.Fatalf("observations = %#v", observations)
 	}
 }
 

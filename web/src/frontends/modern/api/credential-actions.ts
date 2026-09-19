@@ -135,6 +135,8 @@ export interface CredentialStateSnapshot {
   model: string
   // running 由服务端给出：界面只跟随它切换启停与轮询，不自行计时。
   running: boolean
+  // runningModels 是当前全部在跑刷新的模型：界面据此列出刷新任务并逐个取消。
+  runningModels: string[]
   states: CredentialStateModelState[]
   logs: CredentialStateRefreshRecord[]
 }
@@ -181,6 +183,7 @@ function readCredentialStateSnapshot(value: unknown): CredentialStateSnapshot {
     availableModels: list(data.available_models).map((model) => text(model)),
     model: text(data.model),
     running: boolean(data.running),
+    runningModels: list(data.running_models).map((model) => text(model)),
     states: list(data.states).map(readStateModelState),
     logs: list(data.logs).map(readStateRefreshRecord),
   }

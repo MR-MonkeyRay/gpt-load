@@ -12,6 +12,7 @@ import {
   RefreshCw,
   RotateCcw,
   Trash2,
+  X,
 } from '@lucide/vue'
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
@@ -57,6 +58,7 @@ const props = withDefaults(
     stateBusy: boolean
     stateLoading: boolean
     stateError: string
+    stateStoppingModels: string[]
     channelIcon?: string
     channelMark?: string
     capabilities: ChannelCapabilitiesDto
@@ -78,6 +80,7 @@ const emit = defineEmits<{
   download: [item: CredentialItemDto]
   'refresh-credential': [item: CredentialItemDto]
   'refresh-state': [payload: { item: CredentialItemDto; model: string }]
+  'stop-state': [payload: { item: CredentialItemDto; model: string }]
   'load-state': [payload: { item: CredentialItemDto; model: string }]
   remove: [item: CredentialItemDto]
   weight: [payload: { item: CredentialItemDto; value: string }]
@@ -270,6 +273,8 @@ function stateFailureLabel(code: string): string {
 const stateRunning = computed(
   () => props.state?.running === true && props.state?.model === selectedStateModel.value,
 )
+// 同一凭据可以同时刷新多个模型：任务列表列出全部在跑的刷新，并逐个给出取消入口。
+const stateRunningModels = computed(() => props.state?.running_models ?? [])
 // 运行状态取自服务端快照：同一个控件在启动与停止之间切换。
 const stateActionLabel = computed(() =>
   t(
@@ -1503,6 +1508,32 @@ function runMenuAction(
             </AppButton>
           </div>
         </div>
+        <div v-if="stateRunningModels.length" class="subscription-account__state-tasks">
+          <span class="subscription-account__state-logs-title">
+            {{ t('group.credentials.subscription.state.tasks') }}
+          </span>
+          <div
+            v-for="model in stateRunningModels"
+            :key="model"
+            class="subscription-account__state-task"
+          >
+            <StatusBadge tone="info" icon="progress" size="compact">
+              {{ t('group.credentials.subscription.state.runningModel') }}
+            </StatusBadge>
+            <span class="subscription-account__state-task-model">{{ model }}</span>
+            <IconButton
+              variant="ghost"
+              size="xs"
+              tone="danger"
+              :label="t('group.credentials.subscription.state.cancelRefresh', { model })"
+              :busy="stateStoppingModels.includes(model)"
+              :disabled="stateStoppingModels.includes(model)"
+              @click="emit('stop-state', { item, model })"
+            >
+              <X :size="14" aria-hidden="true" />
+            </IconButton>
+          </div>
+        </div>
         <p v-if="stateLoading && !state" class="subscription-account__state-status" role="status">
           {{ t('group.credentials.subscription.state.loading') }}
         </p>
@@ -1591,99 +1622,102 @@ function runMenuAction(
             <p v-if="!state?.logs.length" class="subscription-account__state-hint">
               {{ t('group.credentials.subscription.state.historyEmpty') }}
             </p>
-            <details
-              v-for="record in state?.logs ?? []"
-              :key="record.id"
-              class="subscription-account__state-record"
-            >
-              <summary>
-                <StatusBadge
-                  :tone="record.status === 'succeeded' ? 'success' : 'danger'"
-                  size="compact"
-                >
-                  {{ t(`group.credentials.subscription.state.status.${record.status}`) }}
-                </StatusBadge>
-                <StatusBadge
-                  :tone="record.source === 'natural' ? 'info' : 'neutral'"
-                  size="compact"
-                >
-                  {{ t(`group.credentials.subscription.state.source.${record.source}`) }}
-                </StatusBadge>
-                <AppRelativeTime
-                  :instant="record.created_at_ms"
-                  :locale="locale"
-                  :empty-label="t('group.credentials.subscription.unknown')"
-                  hint
-                />
-                <span v-if="record.source === 'refresh'">
-                  {{
-                    t('group.credentials.subscription.state.attempts', {
-                      count: n(record.attempts),
-                    })
-                  }}
-                </span>
-                <span>
-                  {{
-                    t('group.credentials.subscription.state.stateLength', {
-                      length: n(record.state_length),
-                    })
-                  }}
-                </span>
-              </summary>
-              <div class="subscription-account__state-record-body">
-                <div class="subscription-account__state-record-state">
-                  <span class="subscription-account__state-record-label">
-                    {{ t('group.credentials.subscription.state.captured') }}
+            <div v-else class="subscription-account__state-records">
+              <details
+                v-for="record in state?.logs ?? []"
+                :key="record.id"
+                class="subscription-account__state-record"
+              >
+                <summary>
+                  <StatusBadge
+                    :tone="record.status === 'succeeded' ? 'success' : 'danger'"
+                    size="compact"
+                  >
+                    {{ t(`group.credentials.subscription.state.status.${record.status}`) }}
+                  </StatusBadge>
+                  <span class="subscription-account__state-record-model">{{ record.model }}</span>
+                  <StatusBadge
+                    :tone="record.source === 'natural' ? 'info' : 'neutral'"
+                    size="compact"
+                  >
+                    {{ t(`group.credentials.subscription.state.source.${record.source}`) }}
+                  </StatusBadge>
+                  <AppRelativeTime
+                    :instant="record.created_at_ms"
+                    :locale="locale"
+                    :empty-label="t('group.credentials.subscription.unknown')"
+                    hint
+                  />
+                  <span v-if="record.source === 'refresh'">
+                    {{
+                      t('group.credentials.subscription.state.attempts', {
+                        count: n(record.attempts),
+                      })
+                    }}
                   </span>
-                  <code v-if="record.turn_state" class="subscription-account__state-value">{{
-                    record.turn_state
-                  }}</code>
-                  <span v-else class="subscription-account__state-empty">
-                    {{ t('group.credentials.subscription.state.empty') }}
+                  <span>
+                    {{
+                      t('group.credentials.subscription.state.stateLength', {
+                        length: n(record.state_length),
+                      })
+                    }}
                   </span>
+                </summary>
+                <div class="subscription-account__state-record-body">
+                  <div class="subscription-account__state-record-state">
+                    <span class="subscription-account__state-record-label">
+                      {{ t('group.credentials.subscription.state.captured') }}
+                    </span>
+                    <code v-if="record.turn_state" class="subscription-account__state-value">{{
+                      record.turn_state
+                    }}</code>
+                    <span v-else class="subscription-account__state-empty">
+                      {{ t('group.credentials.subscription.state.empty') }}
+                    </span>
+                  </div>
+                  <div class="subscription-account__state-record-request">
+                    <span class="subscription-account__state-record-label">
+                      {{ t('group.credentials.subscription.state.request') }}
+                    </span>
+                    <dl class="subscription-account__state-record-details">
+                      <div>
+                        <dt>{{ t('group.credentials.subscription.state.model') }}</dt>
+                        <dd>{{ record.model }}</dd>
+                      </div>
+                      <div v-if="record.source === 'refresh'">
+                        <dt>{{ t('group.credentials.subscription.state.input') }}</dt>
+                        <dd>{{ record.input }}</dd>
+                      </div>
+                      <div>
+                        <dt>{{ t('group.credentials.subscription.state.proxy') }}</dt>
+                        <dd>{{ stateProxyLabel(record.proxy_url) }}</dd>
+                      </div>
+                      <div>
+                        <dt>{{ t('group.credentials.subscription.state.baseURL') }}</dt>
+                        <dd>
+                          {{
+                            record.base_url ||
+                            t('group.credentials.subscription.state.baseURLDefault')
+                          }}
+                        </dd>
+                      </div>
+                      <div v-if="record.source === 'refresh'">
+                        <dt>{{ t('group.credentials.subscription.state.duration') }}</dt>
+                        <dd>{{ n(record.duration_ms) }} ms</dd>
+                      </div>
+                      <div v-if="record.status === 'failed'">
+                        <dt>{{ t('group.credentials.subscription.state.result') }}</dt>
+                        <dd>{{ stateFailureLabel(record.error_code ?? '') }}</dd>
+                      </div>
+                      <div v-if="record.source === 'refresh' && record.http_status !== undefined">
+                        <dt>{{ t('group.credentials.subscription.state.httpStatus') }}</dt>
+                        <dd>{{ record.http_status }}</dd>
+                      </div>
+                    </dl>
+                  </div>
                 </div>
-                <div class="subscription-account__state-record-request">
-                  <span class="subscription-account__state-record-label">
-                    {{ t('group.credentials.subscription.state.request') }}
-                  </span>
-                  <dl class="subscription-account__state-record-details">
-                    <div>
-                      <dt>{{ t('group.credentials.subscription.state.model') }}</dt>
-                      <dd>{{ record.model }}</dd>
-                    </div>
-                    <div v-if="record.source === 'refresh'">
-                      <dt>{{ t('group.credentials.subscription.state.input') }}</dt>
-                      <dd>{{ record.input }}</dd>
-                    </div>
-                    <div>
-                      <dt>{{ t('group.credentials.subscription.state.proxy') }}</dt>
-                      <dd>{{ stateProxyLabel(record.proxy_url) }}</dd>
-                    </div>
-                    <div>
-                      <dt>{{ t('group.credentials.subscription.state.baseURL') }}</dt>
-                      <dd>
-                        {{
-                          record.base_url ||
-                          t('group.credentials.subscription.state.baseURLDefault')
-                        }}
-                      </dd>
-                    </div>
-                    <div v-if="record.source === 'refresh'">
-                      <dt>{{ t('group.credentials.subscription.state.duration') }}</dt>
-                      <dd>{{ n(record.duration_ms) }} ms</dd>
-                    </div>
-                    <div v-if="record.status === 'failed'">
-                      <dt>{{ t('group.credentials.subscription.state.result') }}</dt>
-                      <dd>{{ stateFailureLabel(record.error_code ?? '') }}</dd>
-                    </div>
-                    <div v-if="record.source === 'refresh' && record.http_status !== undefined">
-                      <dt>{{ t('group.credentials.subscription.state.httpStatus') }}</dt>
-                      <dd>{{ record.http_status }}</dd>
-                    </div>
-                  </dl>
-                </div>
-              </div>
-            </details>
+              </details>
+            </div>
           </div>
         </template>
       </section>
@@ -2390,11 +2424,54 @@ function runMenuAction(
   color: var(--color-text-faint);
   font-size: var(--text-label-xs);
 }
-.subscription-account__state-record {
+.subscription-account__state-tasks {
+  display: grid;
+  gap: var(--space-1);
+  min-width: 0;
+}
+.subscription-account__state-task {
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr) max-content;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+  padding: var(--space-1) var(--space-2);
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-control);
+}
+.subscription-account__state-task-model {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--color-text);
+  font-size: var(--text-label-xs);
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+/* 全部刷新记录共用一个框：记录之间只用分隔线，不再各自成框。 */
+.subscription-account__state-records {
+  display: grid;
+  min-width: 0;
   border: 1px solid var(--color-border-subtle);
   border-radius: var(--radius-control);
   background: var(--color-surface-sunken);
+  overflow: hidden;
+}
+.subscription-account__state-record-model {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--color-text);
+  font-size: var(--text-label-xs);
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.subscription-account__state-record {
   padding: 8px 10px;
+  min-width: 0;
+}
+.subscription-account__state-record + .subscription-account__state-record {
+  border-top: 1px solid var(--color-border-subtle);
 }
 .subscription-account__state-record > summary {
   display: flex;

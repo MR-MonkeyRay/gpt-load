@@ -18,6 +18,7 @@ import (
 	"gpt-load/internal/outboundproxy"
 	app_errors "gpt-load/internal/platform/errors"
 	"gpt-load/internal/platform/utils"
+	"gpt-load/internal/state"
 	"gpt-load/internal/storage/models"
 	subscriptionruntime "gpt-load/internal/subscription/runtime"
 )
@@ -89,7 +90,7 @@ type CredentialStateModelResponse struct {
 	StateLength int    `json:"state_length"`
 	// RefreshedAtMS 是这次捕获的写入时刻；没有捕获时为空。
 	RefreshedAtMS *int64 `json:"refreshed_at_ms"`
-	// ExpiresAtMS 是保留状态自身携带的有效期；为空表示该值无法解析出有效期。
+	// ExpiresAtMS 是这次捕获的有效期：记录时间 + 1 小时；没有记录时间时为空。
 	ExpiresAtMS *int64 `json:"expires_at_ms"`
 	// Running 表示该模型当前是否有后台刷新在运行。
 	Running bool `json:"running"`
@@ -643,7 +644,7 @@ func (s *Service) persistCredentialTurnState(
 		}
 		return tx.Create(&record).Error
 	}, func() error {
-		if !s.registry.SetCredentialTurnState(credentialID, model, turnState) {
+		if !s.registry.SetCredentialTurnState(credentialID, model, turnState, refreshedAtMS) {
 			return fmt.Errorf("publish credential turn state: credential %d is unavailable", credentialID)
 		}
 		return nil
@@ -766,7 +767,7 @@ func credentialStateModelResponse(row models.CredentialTurnState) CredentialStat
 		refreshedAtMS := row.RefreshedAtMS
 		response.RefreshedAtMS = &refreshedAtMS
 	}
-	if expiresAtMS := execution.TurnStateExpiryMS(row.TurnState); expiresAtMS > 0 {
+	if expiresAtMS := state.NewTurnState(row.TurnState, row.RefreshedAtMS).ExpiresAtMS; expiresAtMS > 0 {
 		response.ExpiresAtMS = &expiresAtMS
 	}
 	return response

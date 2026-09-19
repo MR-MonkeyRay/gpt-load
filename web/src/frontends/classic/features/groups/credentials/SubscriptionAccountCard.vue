@@ -19,6 +19,7 @@ import { useI18n } from 'vue-i18n'
 import type {
   CredentialItemDto,
   CredentialStateDto,
+  CredentialStateModelDto,
   ProxyMutation,
   CredentialQuotaLabelKey,
   CredentialQuotaWindowDto,
@@ -215,6 +216,51 @@ watch(
 function stateProxyLabel(value: string): string {
   if (value === 'direct') return t('group.credentials.subscription.state.proxyDirect')
   return value === '' ? t('group.credentials.subscription.state.proxyEnvironment') : value
+}
+// State 列表的有效期倒计时按秒刷新；只在展开且通道支持 State 时才计时。
+const stateNowMs = ref(Date.now())
+let stateClockTimer: number | undefined
+function stopStateClock(): void {
+  if (stateClockTimer === undefined) return
+  window.clearInterval(stateClockTimer)
+  stateClockTimer = undefined
+}
+watch(
+  () => detailsExpanded.value && supportsStateRefresh.value,
+  (active) => {
+    stopStateClock()
+    if (!active) return
+    stateNowMs.value = Date.now()
+    stateClockTimer = window.setInterval(() => {
+      stateNowMs.value = Date.now()
+    }, 1_000)
+  },
+  { immediate: true },
+)
+onBeforeUnmount(stopStateClock)
+function stateRemainingExpired(entry: CredentialStateModelDto): boolean {
+  const expiresAtMS = entry.expires_at_ms
+  return expiresAtMS !== null && expiresAtMS > 0 && expiresAtMS <= stateNowMs.value
+}
+// 有效期 = 记录时间 + 1 小时；没有记录时间的捕获没有可用的有效期。
+function stateRemainingLabel(entry: CredentialStateModelDto): string {
+  const expiresAtMS = entry.expires_at_ms
+  if (expiresAtMS === null || expiresAtMS <= 0) {
+    return entry.turn_state
+      ? t('group.credentials.subscription.unknown')
+      : t('group.credentials.subscription.state.empty')
+  }
+  const totalSeconds = Math.max(0, Math.floor((expiresAtMS - stateNowMs.value) / 1_000))
+  const hours = Math.floor(totalSeconds / 3_600)
+  const minutes = Math.floor((totalSeconds % 3_600) / 60)
+  const seconds = totalSeconds % 60
+  if (hours > 0) {
+    return t('group.credentials.subscription.state.remainingHours', { hours, minutes })
+  }
+  if (minutes > 0) {
+    return t('group.credentials.subscription.state.remainingMinutes', { minutes, seconds })
+  }
+  return t('group.credentials.subscription.state.remainingSeconds', { seconds })
 }
 function stateFailureLabel(code: string): string {
   const key = `group.credentials.subscription.state.failure.${code}`
@@ -1495,59 +1541,57 @@ function runMenuAction(
             {{ t('group.credentials.subscription.state.empty') }}
           </p>
           <div v-else class="subscription-account__state-list">
+            <div class="subscription-account__state-columns" role="row">
+              <span role="columnheader">{{ t('group.credentials.subscription.state.model') }}</span>
+              <span role="columnheader">
+                {{ t('group.credentials.subscription.state.recordedAt') }}
+              </span>
+              <span role="columnheader">
+                {{ t('group.credentials.subscription.state.remaining') }}
+              </span>
+            </div>
             <div
               v-for="entry in state?.states ?? []"
               :key="entry.model"
               class="subscription-account__state-entry"
+              role="row"
             >
-              <div class="subscription-account__state-entry-head">
-                <span class="subscription-account__state-model">{{ entry.model }}</span>
+              <span class="subscription-account__state-model" role="cell">
+                {{ entry.model }}
                 <StatusBadge v-if="entry.running" tone="info" icon="progress" size="compact">
                   {{ t('group.credentials.subscription.state.runningModel') }}
                 </StatusBadge>
-              </div>
-              <dl class="subscription-account__state-summary">
-                <div>
-                  <dt>{{ t('group.credentials.subscription.state.current') }}</dt>
-                  <dd>
-                    <code v-if="entry.turn_state" class="subscription-account__state-value">{{
-                      entry.turn_state
-                    }}</code>
-                    <span v-else class="subscription-account__state-empty">
-                      {{ t('group.credentials.subscription.state.empty') }}
-                    </span>
-                  </dd>
-                </div>
-                <div>
-                  <dt>{{ t('group.credentials.subscription.state.recordedAt') }}</dt>
-                  <dd>
-                    <AppRelativeTime
-                      :instant="entry.refreshed_at_ms"
-                      :locale="locale"
-                      :empty-label="t('group.credentials.subscription.unknown')"
-                      hint
-                    />
-                  </dd>
-                </div>
-                <div>
-                  <dt>{{ t('group.credentials.subscription.state.expiresAt') }}</dt>
-                  <dd class="subscription-account__state-expiry">
-                    <template v-if="entry.expires_at_ms !== null">
-                      <span>{{ formatLocalInstant(entry.expires_at_ms, locale) }}</span>
-                      <StatusBadge v-if="entry.expires_at_ms <= nowMs" tone="danger" size="compact">
-                        {{ t('group.credentials.subscription.state.expired') }}
-                      </StatusBadge>
-                    </template>
-                    <span v-else class="subscription-account__state-empty">
-                      {{
-                        entry.turn_state
-                          ? t('group.credentials.subscription.unknown')
-                          : t('group.credentials.subscription.state.empty')
-                      }}
-                    </span>
-                  </dd>
-                </div>
-              </dl>
+              </span>
+              <span
+                class="subscription-account__state-recorded"
+                role="cell"
+                :data-label="t('group.credentials.subscription.state.recordedAt')"
+              >
+                <AppRelativeTime
+                  :instant="entry.refreshed_at_ms"
+                  :locale="locale"
+                  :empty-label="t('group.credentials.subscription.state.empty')"
+                  hint
+                />
+              </span>
+              <span
+                class="subscription-account__state-remaining"
+                role="cell"
+                :data-label="t('group.credentials.subscription.state.remaining')"
+              >
+                <StatusBadge v-if="stateRemainingExpired(entry)" tone="danger" size="compact">
+                  {{ t('group.credentials.subscription.state.expired') }}
+                </StatusBadge>
+                <AppTooltip
+                  v-else-if="entry.expires_at_ms !== null"
+                  :content="formatLocalInstant(entry.expires_at_ms, locale)"
+                >
+                  <span>{{ stateRemainingLabel(entry) }}</span>
+                </AppTooltip>
+                <span v-else class="subscription-account__state-empty">
+                  {{ stateRemainingLabel(entry) }}
+                </span>
+              </span>
             </div>
           </div>
           <p v-if="state" class="subscription-account__state-hint">
@@ -2297,56 +2341,46 @@ function runMenuAction(
 }
 .subscription-account__state-list {
   display: grid;
+  gap: var(--space-1);
+  min-width: 0;
+}
+.subscription-account__state-columns,
+.subscription-account__state-entry {
+  display: grid;
+  grid-template-columns: minmax(0, 1.2fr) minmax(0, 1fr) minmax(0, 1fr);
+  align-items: center;
   gap: var(--space-3);
   min-width: 0;
 }
+.subscription-account__state-columns {
+  color: var(--color-text-faint);
+  font-size: var(--text-label-xs);
+}
 .subscription-account__state-entry {
-  display: grid;
-  gap: var(--space-2);
-  min-width: 0;
   border: 1px solid var(--color-border-subtle);
   border-radius: var(--radius-control);
   background: var(--color-surface-sunken);
   padding: 8px 10px;
 }
-.subscription-account__state-entry-head {
+.subscription-account__state-model {
   display: flex;
   align-items: center;
   flex-wrap: wrap;
   gap: var(--space-2);
   min-width: 0;
-}
-.subscription-account__state-model {
   color: var(--color-text);
   font-family: var(--font-mono);
   font-size: var(--text-label-xs);
   font-weight: 600;
   overflow-wrap: anywhere;
 }
-.subscription-account__state-summary {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: var(--space-4);
-  margin: 0;
-}
-.subscription-account__state-summary > div {
-  min-width: 0;
-}
-.subscription-account__state-summary dt {
-  color: var(--color-text-faint);
-  font-size: var(--text-label-xs);
-}
-.subscription-account__state-summary dd {
-  margin: 3px 0 0;
+.subscription-account__state-recorded,
+.subscription-account__state-remaining {
   min-width: 0;
   color: var(--color-text);
+  font-size: var(--text-label-xs);
   font-variant-numeric: tabular-nums;
-}
-.subscription-account__state-expiry {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: var(--space-2);
+  overflow-wrap: anywhere;
 }
 .subscription-account__state-value {
   display: block;
@@ -2435,8 +2469,23 @@ function runMenuAction(
   color: var(--color-text);
 }
 @media (max-width: 720px) {
-  .subscription-account__state-summary {
+  .subscription-account__state-columns {
+    display: none;
+  }
+  .subscription-account__state-entry {
     grid-template-columns: minmax(0, 1fr);
+    gap: var(--space-1);
+  }
+  .subscription-account__state-recorded,
+  .subscription-account__state-remaining {
+    display: grid;
+    grid-template-columns: max-content minmax(0, 1fr);
+    gap: var(--space-2);
+  }
+  .subscription-account__state-recorded::before,
+  .subscription-account__state-remaining::before {
+    content: attr(data-label);
+    color: var(--color-text-faint);
   }
 }
 

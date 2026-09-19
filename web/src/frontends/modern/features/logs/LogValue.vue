@@ -13,6 +13,7 @@ import {
   AppOverflowText,
   AppTooltip,
 } from '@modern/components/ui'
+import { TURN_STATE_LENGTH } from '@shared/state/turn-state'
 import type { LogColumnId } from './log-columns'
 import {
   exactLogMoney,
@@ -140,6 +141,8 @@ const display = computed(() => {
       return row[column] || '—'
     case 'turn_state':
       return row.turn_state || '—'
+    case 'state_length':
+      return row.turn_state ? String(row.state_length) : '—'
     default:
       return valueName(row[column as 'client_model'])
   }
@@ -248,6 +251,12 @@ const hint = computed(() => {
   <AppTooltip v-else-if="table && column === 'attempt_count' && row.attempt_count > 1" :label="hint"
     ><span class="modern-log-retry">{{ display }}</span></AppTooltip
   >
+  <span
+    v-else-if="column === 'state_length'"
+    class="modern-log-state modern-log-state-length"
+    :class="{ 'is-exact': row.state_length === TURN_STATE_LENGTH }"
+    >{{ display }}</span
+  >
   <AppOverflowText
     v-else
     :text="display"
@@ -322,6 +331,13 @@ const hint = computed(() => {
 .modern-log-state {
   font-family: var(--modern-font-mono);
   font-size: var(--modern-font-size-caption);
+}
+.modern-log-state-length {
+  color: var(--modern-muted);
+  font-variant-numeric: tabular-nums;
+}
+.modern-log-state-length.is-exact {
+  color: var(--modern-status-success);
 }
 .modern-log-amount {
   font-family: var(--modern-font-mono);

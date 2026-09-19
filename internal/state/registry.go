@@ -8,7 +8,6 @@ import (
 	"sync"
 	"time"
 
-	"gpt-load/internal/execution"
 	providerobservation "gpt-load/internal/subscription/providers/observation"
 )
 
@@ -589,11 +588,12 @@ func (r *CredentialRegistry) SetCredentialAuthState(credentialID uint, authState
 }
 
 // SetCredentialTurnState publishes a captured turn state for one credential and
-// one upstream model. The value is mutable runtime state and intentionally not
-// part of credential identity, so in-flight requests are never invalidated by a
-// refresh. The replay expiry is derived from the value itself and replayed only
-// while it is still in the future, and only for the model it was captured for.
-func (r *CredentialRegistry) SetCredentialTurnState(credentialID uint, model, turnState string) bool {
+// one upstream model, recorded at refreshedAtMS. The value is mutable runtime
+// state and intentionally not part of credential identity, so in-flight requests
+// are never invalidated by a refresh. The replay expiry is the record time plus
+// the turn state TTL, and the value is replayed only while it is still in the
+// future and only for the model it was captured for.
+func (r *CredentialRegistry) SetCredentialTurnState(credentialID uint, model, turnState string, refreshedAtMS int64) bool {
 	if credentialID == 0 {
 		return false
 	}
@@ -607,7 +607,7 @@ func (r *CredentialRegistry) SetCredentialTurnState(credentialID uint, model, tu
 	if !ok {
 		return false
 	}
-	entry.TurnStates = entry.TurnStates.WithCapture(model, turnState, execution.TurnStateExpiryMS(turnState))
+	entry.TurnStates = entry.TurnStates.WithCapture(model, turnState, refreshedAtMS)
 	return true
 }
 

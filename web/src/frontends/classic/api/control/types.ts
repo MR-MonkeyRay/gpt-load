@@ -277,7 +277,7 @@ export interface CredentialStateModelDto {
   state_length: number
   /** 捕获的写入时刻；该模型没有捕获时为空。 */
   refreshed_at_ms: number | null
-  /** State 自身携带的有效期；为空表示无法从该值解析出有效期。 */
+  /** 本次捕获的有效期：记录时间 + 1 小时；没有记录时间时为空。 */
   expires_at_ms: number | null
   /** 由服务端报告的该模型刷新运行状态，不由本地计时器推导。 */
   running: boolean

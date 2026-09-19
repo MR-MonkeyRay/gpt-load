@@ -24,6 +24,7 @@ import (
 	"gpt-load/internal/state/loader"
 	"gpt-load/internal/storage/models"
 	"gpt-load/internal/testutil/sqlitetest"
+	"gpt-load/internal/testutil/turnstatetest"
 )
 
 func TestBuildCompileInputWithProxyDecryptsGlobalAndGroupPolicies(t *testing.T) {
@@ -719,6 +720,54 @@ func TestLoaderMapsAccessAndCredentials(t *testing.T) {
 		if strings.Contains(snapshotText, secret) {
 			t.Errorf("snapshot exposes credential material %q", secret)
 		}
+	}
+}
+
+// 从库里读出的捕获必须带上记录时间：有效期是记录时间 + 1 小时，只对捕获时的模型生效，
+// 没有记录时间的捕获无法证明有效期，绝不回放。
+func TestLoaderLoadsTurnStateCapturesWithTheirRecordTime(t *testing.T) {
+	db := openMigratedDatabase(t)
+	group := createRuntimeGroup(t, db, "state", protocol.OpenAICompletions, "gpt-4o")
+	credential := models.Credential{
+		GroupID: group.ID, Data: "credential-cipher-state",
+		Fingerprint: "credential-fingerprint-state", Status: models.CredentialStatusActive,
+	}
+	mustCreate(t, db, &credential)
+	recordedAt := time.Date(2026, time.September, 18, 12, 0, 0, 0, time.UTC)
+	undated := models.CredentialTurnState{
+		CredentialID: credential.ID, Model: "gpt-5-codex", TurnState: turnstatetest.Value(1),
+	}
+	captures := []models.CredentialTurnState{
+		{
+			CredentialID: credential.ID, Model: "gpt-6-astra",
+			TurnState: turnstatetest.Value(0), RefreshedAtMS: recordedAt.UnixMilli(),
+		},
+		undated,
+	}
+	for index := range captures {
+		mustCreate(t, db, &captures[index])
+	}
+
+	manager := state.NewManager()
+	registry := state.NewCredentialRegistry()
+	if err := loader.New(db, manager, registry).Load(context.Background()); err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	ref, ok := registry.CredentialRef(credential.ID)
+	if !ok {
+		t.Fatalf("credential %d was not published", credential.ID)
+	}
+	if got := ref.TurnStateFor("gpt-6-astra", recordedAt.Add(59*time.Minute)); got != turnstatetest.Value(0) {
+		t.Fatalf("capture within its validity = %q", got)
+	}
+	if got := ref.TurnStateFor("gpt-6-astra", recordedAt.Add(61*time.Minute)); got != "" {
+		t.Fatalf("capture replayed past its validity = %q", got)
+	}
+	if got := ref.TurnStateFor("gpt-5-codex", recordedAt); got != "" {
+		t.Fatalf("undated capture was replayed = %q", got)
+	}
+	if got := ref.TurnStateFor("gpt-4o", recordedAt); got != "" {
+		t.Fatalf("capture leaked to another model = %q", got)
 	}
 }
 

@@ -110,6 +110,8 @@ export interface LogEntry {
   affinity_hit: boolean
   affinity_kind: string
   turn_state: string
+  // 注入的 State 长度由 turn_state 字符串长度派生，不要求后端新增响应字段。
+  state_length: number
   group_id: number | null
   channel_id: string | null
   credential_id: number | null
@@ -254,6 +256,7 @@ function entry(value: unknown): LogEntry {
   const row = record(value)
   const key = record(row.access_key)
   const id = text(row.request_id)
+  const turnState = text(row.turn_state)
   if (!logRequestPattern.test(id)) throw new InvalidResponseError()
   return {
     request_id: id,
@@ -281,7 +284,8 @@ function entry(value: unknown): LogEntry {
     error_summary: text(row.error_summary),
     affinity_hit: boolean(row.affinity_hit),
     affinity_kind: text(row.affinity_kind),
-    turn_state: text(row.turn_state),
+    turn_state: turnState,
+    state_length: turnState.length,
     group_id: optionalNumber(row.group_id),
     channel_id: optionalText(row.channel_id),
     credential_id: optionalNumber(row.credential_id),

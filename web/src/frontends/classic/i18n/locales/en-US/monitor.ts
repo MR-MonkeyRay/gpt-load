@@ -950,6 +950,7 @@ export default {
         time: 'Time',
         modelProtocol: 'Model / protocol',
         state: 'State',
+        stateLength: 'State length',
         response: 'Response',
         cost: 'Cost',
         tokens: 'Tokens',

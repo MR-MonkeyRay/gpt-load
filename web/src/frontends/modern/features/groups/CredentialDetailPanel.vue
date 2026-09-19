@@ -29,7 +29,6 @@ import {
   AppTooltip,
 } from '@modern/components/ui'
 import { useApiClient } from '@shared/http/client-context'
-import { useClock } from '@modern/components/ui/clock'
 import { credentialStatus, credentialTime } from './credential-presentation'
 import { validProxyURL } from '@modern/app/proxy'
 import GroupWorkspacePanel from './GroupWorkspacePanel.vue'
@@ -167,7 +166,23 @@ const stateModelOptions = computed(() =>
   (stateQuery.data.value?.availableModels ?? []).map((model) => ({ value: model, label: model })),
 )
 const stateModels = computed(() => stateQuery.data.value?.states ?? [])
-const now = useClock()
+// 剩余有效期要按秒跳动：共用的展示时钟是 30 秒粒度，这里单独维护一个秒级时钟。
+const stateNow = ref(Date.now())
+let stateTicker: ReturnType<typeof setInterval> | undefined
+watch(
+  supportsStateRefresh,
+  (enabled) => {
+    if (!enabled || stateTicker !== undefined) return
+    stateNow.value = Date.now()
+    stateTicker = setInterval(() => {
+      stateNow.value = Date.now()
+    }, 1_000)
+  },
+  { immediate: true },
+)
+onScopeDispose(() => {
+  if (stateTicker !== undefined) clearInterval(stateTicker)
+})
 const stateRunning = computed(() => stateQuery.data.value?.running ?? false)
 const statePending = ref(false)
 const stateFeedback = ref('')
@@ -186,7 +201,24 @@ function stateRecordTime(value: number | null): string {
   return value ? credentialTime(value, locale.value) : '—'
 }
 function stateExpiredAt(expiresAt: number | null): boolean {
-  return expiresAt !== null && expiresAt <= now.value
+  return expiresAt !== null && expiresAt > 0 && expiresAt <= stateNow.value
+}
+// 剩余有效期随秒级时钟走字；没有有效期的回退到未知，过期后交给已过期文案。
+function stateRemaining(expiresAt: number | null): string {
+  if (expiresAt === null || expiresAt <= 0) return t('credentialCards.state.expiryUnknown')
+  const milliseconds = expiresAt - stateNow.value
+  if (milliseconds <= 0) return t('credentialCards.state.expired')
+  const total = Math.floor(milliseconds / 1_000)
+  const hours = Math.floor(total / 3_600)
+  const minutes = Math.floor(total / 60) % 60
+  const seconds = total % 60
+  return [
+    ...(hours ? [t('credentialCards.state.remainingHour', { value: n(hours) })] : []),
+    ...(hours || minutes
+      ? [t('credentialCards.state.remainingMinute', { value: n(minutes) })]
+      : []),
+    t('credentialCards.state.remainingSecond', { value: n(seconds) }),
+  ].join('')
 }
 function stateRequestShown(id: number): boolean {
   return stateRequestDetails.value.has(id)
@@ -443,48 +475,27 @@ useMessageSource(() =>
             <p v-if="!stateModels.length" class="modern-credential-detail-hint">
               {{ t('credentialCards.state.empty') }}
             </p>
-            <div v-for="entry in stateModels" :key="entry.model" class="modern-state-record">
-              <div class="modern-credential-detail-title">
-                <AppOverflowText :text="entry.model" />
-                <AppBadge v-if="entry.running" tone="info" size="xs" dot>{{
-                  t('credentialCards.state.running')
-                }}</AppBadge>
+            <div v-else class="modern-state-table">
+              <div class="modern-state-table-row is-head">
+                <span>{{ t('credentialCards.state.model') }}</span>
+                <span>{{ t('credentialCards.state.recordedAt') }}</span>
+                <span>{{ t('credentialCards.state.remaining') }}</span>
               </div>
-              <dl class="modern-state-record-grid">
-                <div>
-                  <dt>{{ t('credentialCards.state.current') }}</dt>
-                  <dd>
-                    <code v-if="entry.turnState" class="modern-state-value">{{
-                      entry.turnState
-                    }}</code>
-                    <span v-else>{{ t('credentialCards.state.empty') }}</span>
-                  </dd>
-                </div>
-                <div>
-                  <dt>{{ t('credentialCards.state.recordedAt') }}</dt>
-                  <dd>{{ stateRecordTime(entry.refreshedAt) }}</dd>
-                </div>
-                <div>
-                  <dt>{{ t('credentialCards.state.expiresAt') }}</dt>
-                  <dd>
-                    <span v-if="entry.expiresAt !== null" class="modern-state-expiry">
-                      <span
-                        :class="{
-                          'modern-credential-detail-failure': stateExpiredAt(entry.expiresAt),
-                        }"
-                        >{{ credentialTime(entry.expiresAt, locale) }}</span
-                      >
-                      <AppBadge v-if="stateExpiredAt(entry.expiresAt)" tone="danger" size="xs">{{
-                        t('credentialCards.state.expired')
-                      }}</AppBadge>
-                    </span>
-                    <span v-else-if="entry.turnState">{{
-                      t('credentialCards.state.expiryUnknown')
-                    }}</span>
-                    <span v-else>—</span>
-                  </dd>
-                </div>
-              </dl>
+              <div v-for="entry in stateModels" :key="entry.model" class="modern-state-table-row">
+                <span class="modern-state-table-model">
+                  <AppOverflowText :text="entry.model" />
+                  <AppBadge v-if="entry.running" tone="info" size="xs" dot>{{
+                    t('credentialCards.state.running')
+                  }}</AppBadge>
+                </span>
+                <span>{{ stateRecordTime(entry.refreshedAt) }}</span>
+                <span
+                  :class="{
+                    'modern-credential-detail-failure': stateExpiredAt(entry.expiresAt),
+                  }"
+                  >{{ stateRemaining(entry.expiresAt) }}</span
+                >
+              </div>
             </div>
           </div>
           <div class="modern-state-history">
@@ -659,10 +670,34 @@ useMessageSource(() =>
   align-items: end;
   gap: var(--modern-space-3);
 }
-.modern-state-expiry {
-  display: inline-flex;
+.modern-state-table {
+  display: grid;
+  min-width: 0;
+  font-size: var(--modern-font-size-small);
+  font-variant-numeric: tabular-nums;
+}
+.modern-state-table-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) max-content max-content;
+  align-items: center;
+  gap: var(--modern-space-2) var(--modern-space-3);
+  min-width: 0;
+  padding: var(--modern-space-1-5) 0;
+  border-top: var(--modern-line-width) solid var(--modern-border);
+}
+.modern-state-table-row.is-head {
+  border-top: none;
+  color: var(--modern-muted);
+  font-variant-numeric: normal;
+}
+.modern-state-table-row > :last-child {
+  text-align: right;
+}
+.modern-state-table-model {
+  display: flex;
   align-items: center;
   gap: var(--modern-space-1-5);
+  min-width: 0;
 }
 .modern-state-history {
   display: grid;

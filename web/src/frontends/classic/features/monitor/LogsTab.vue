@@ -6,6 +6,7 @@ import { useI18n } from 'vue-i18n'
 import { useRoute, useRouter } from 'vue-router'
 
 import { useApiClient } from '@shared/http/client-context'
+import { TURN_STATE_LENGTH } from '@shared/state/turn-state'
 import { useCollectionLoading } from '@/app/loading-state'
 import { accessKeyOptionsQueryOptions } from '@/app/resources/access-keys'
 import { listChannels, type ChannelDto } from '@/app/resources/channels'
@@ -29,7 +30,12 @@ import PaginationBar from '@/components/ui/PaginationBar.vue'
 import QueryFeedback from '@/components/ui/QueryFeedback.vue'
 import SkeletonSurface from '@/components/ui/SkeletonSurface.vue'
 import StatusBadge from '@/components/ui/StatusBadge.vue'
-import { formatEstimatedCost, formatISOInstant, formatLocalInstantWithSeconds } from '@/lib/format'
+import {
+  formatEstimatedCost,
+  formatISOInstant,
+  formatInteger,
+  formatLocalInstantWithSeconds,
+} from '@/lib/format'
 import { resolveDateTimePreset, type DateTimePreset } from '@/lib/time'
 import { useAuthSession } from '@/features/auth/auth-session'
 
@@ -691,7 +697,7 @@ function costLabel(log: RequestLogItemDto): string {
       v-if="logsQuery.isPending.value || initialLoading"
       variant="collection"
       :rows="appliedFilters.limit ?? 20"
-      :columns="isAccessKey ? 8 : 10"
+      :columns="isAccessKey ? 9 : 11"
       row-height="72px"
       mobile-row-height="176px"
       :concealed="!initialLoading"
@@ -716,7 +722,7 @@ function costLabel(log: RequestLogItemDto): string {
         v-if="collectionTransition"
         variant="collection"
         :rows="skeletonRows"
-        :columns="isAccessKey ? 8 : 10"
+        :columns="isAccessKey ? 9 : 11"
         row-height="72px"
         mobile-row-height="176px"
         :label="t('monitor.logs.loading')"
@@ -736,6 +742,7 @@ function costLabel(log: RequestLogItemDto): string {
           <span v-if="!isAccessKey" role="columnheader">{{ t('monitor.logs.columns.route') }}</span>
           <span role="columnheader">{{ t('monitor.logs.columns.modelProtocol') }}</span>
           <span role="columnheader">{{ t('monitor.logs.columns.state') }}</span>
+          <span role="columnheader">{{ t('monitor.logs.columns.stateLength') }}</span>
           <span role="columnheader">{{ t('monitor.logs.columns.response') }}</span>
           <span role="columnheader">{{ t('monitor.logs.columns.cost') }}</span>
           <span class="logs-list__tokens-header" role="columnheader">
@@ -874,6 +881,21 @@ function costLabel(log: RequestLogItemDto): string {
             <OverflowTooltip v-if="log.turn_state" as="code" :content="log.turn_state">
               {{ log.turn_state }}
             </OverflowTooltip>
+            <code v-else>—</code>
+          </div>
+          <div
+            class="ledger-record-list__cell logs-list__cell logs-list__state-length"
+            role="cell"
+            :data-label="t('monitor.logs.columns.stateLength')"
+          >
+            <code
+              v-if="log.turn_state"
+              :class="{
+                'logs-list__state-length--complete': log.turn_state.length === TURN_STATE_LENGTH,
+              }"
+            >
+              {{ formatInteger(log.turn_state.length, locale) }}
+            </code>
             <code v-else>—</code>
           </div>
           <div
@@ -1065,17 +1087,18 @@ function costLabel(log: RequestLogItemDto): string {
 }
 
 .logs-list {
-  /* 时间定长、Token/耗时/成本按实际内容重算，压出的宽度装下新增的密钥列与状态列。 */
+  /* 时间定长、Token/耗时/成本按实际内容重算，压出的宽度装下密钥、状态与 State 长度列。 */
   --ledger-record-list-grid: 96px minmax(96px, 0.62fr) minmax(132px, 0.86fr) minmax(180px, 1.2fr)
-    minmax(88px, 0.5fr) 96px minmax(76px, 0.42fr) minmax(104px, 0.6fr) 100px 34px;
+    minmax(88px, 0.5fr) minmax(56px, 0.3fr) 96px minmax(76px, 0.42fr) minmax(104px, 0.6fr) 100px
+    34px;
   --ledger-record-list-column-gap: 16px;
   --ledger-record-list-record-min-height: 72px;
   --ledger-record-list-record-padding: 10px 0;
 }
 
 .logs-list--scoped {
-  --ledger-record-list-grid: 96px minmax(180px, 1.2fr) minmax(88px, 0.5fr) 96px minmax(76px, 0.42fr)
-    minmax(104px, 0.6fr) 100px 34px;
+  --ledger-record-list-grid: 96px minmax(180px, 1.2fr) minmax(88px, 0.5fr) minmax(56px, 0.3fr) 96px
+    minmax(76px, 0.42fr) minmax(104px, 0.6fr) 100px 34px;
 }
 
 .logs-list__cell {
@@ -1167,6 +1190,16 @@ function costLabel(log: RequestLogItemDto): string {
 
 .logs-list__state {
   font-family: var(--font-mono);
+}
+
+.logs-list__state-length {
+  color: var(--color-text-faint);
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+}
+
+.logs-list__state-length--complete {
+  color: var(--color-success);
 }
 
 .logs-list__reasoning {
@@ -1261,7 +1294,8 @@ function costLabel(log: RequestLogItemDto): string {
   .logs-list {
     --ledger-record-list-column-gap: 10px;
     --ledger-record-list-grid: 92px minmax(88px, 0.6fr) minmax(118px, 0.82fr) minmax(160px, 1.15fr)
-      minmax(80px, 0.48fr) 92px minmax(72px, 0.42fr) minmax(96px, 0.58fr) 96px 32px;
+      minmax(80px, 0.48fr) minmax(52px, 0.28fr) 92px minmax(72px, 0.42fr) minmax(96px, 0.58fr) 96px
+      32px;
   }
 }
 

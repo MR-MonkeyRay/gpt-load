@@ -146,7 +146,7 @@ func TestStartCredentialStateRefreshCapturesCompleteTurnState(t *testing.T) {
 	fixture, groupID, credentialID := newStateRefreshFixture(t)
 	now := time.UnixMilli(1_800_000_000_000)
 	fixture.service.now = func() time.Time { return now }
-	complete := turnstatetest.Token(now.Add(time.Hour))
+	complete := turnstatetest.Value(0)
 	calls := 0
 	var probed subscriptionruntime.StateProbeRequest
 	fixture.service.probeSubscriptionTurnState = func(
@@ -359,11 +359,9 @@ func TestCredentialStateRefreshKeepsExpiredCaptureOutOfReplay(t *testing.T) {
 	t.Parallel()
 
 	fixture, groupID, credentialID := newStateRefreshFixture(t)
-	now := time.UnixMilli(1_800_000_000_000)
-	fixture.service.now = func() time.Time { return now }
-	// 运行期时钟固定在记录时间上，因此有效期必须相对真实时间构造，才能表达“已过期”。
-	expiredAt := time.Now().Add(-time.Minute).Truncate(time.Second)
-	expired := turnstatetest.Token(expiredAt)
+	recordedAt := time.Now().Add(-2 * time.Hour).Truncate(time.Millisecond)
+	fixture.service.now = func() time.Time { return recordedAt }
+	expired := turnstatetest.Value(0)
 	fixture.service.probeSubscriptionTurnState = func(
 		context.Context,
 		channel.ID,
@@ -379,20 +377,24 @@ func TestCredentialStateRefreshKeepsExpiredCaptureOutOfReplay(t *testing.T) {
 	waitStateRefreshIdle(t, fixture.service, credentialID, stateRefreshTestModel)
 
 	capture := turnStateCapture(t, fixture, credentialID, stateRefreshTestModel)
-	if capture == nil || capture.TurnState != expired {
+	if capture == nil || capture.TurnState != expired || capture.RefreshedAtMS != recordedAt.UnixMilli() {
 		t.Fatalf("persisted turn state = %#v", capture)
 	}
-	// 过期值仍然留档展示，但绝不注入到上游请求。
+	// 记录时间 + 1 小时已经过去：捕获仍然留档展示，但绝不注入到上游请求。
 	ref, ok := fixture.registry.CredentialRef(credentialID)
 	if !ok || ref.TurnStateFor(stateRefreshTestModel, time.Now()) != "" {
 		t.Fatalf("expired reference = %#v, found = %t", ref, ok)
+	}
+	if ref.TurnStateFor(stateRefreshTestModel, recordedAt.Add(59*time.Minute)) != expired {
+		t.Fatalf("capture expired before its validity ended: %#v", ref)
 	}
 	state, err := fixture.service.GetCredentialState(t.Context(), groupID, credentialID, stateRefreshTestModel)
 	if err != nil {
 		t.Fatalf("GetCredentialState() error = %v", err)
 	}
 	entry := modelState(t, state, stateRefreshTestModel)
-	if entry.TurnState != expired || entry.ExpiresAtMS == nil || *entry.ExpiresAtMS != expiredAt.UnixMilli() {
+	if entry.TurnState != expired || entry.ExpiresAtMS == nil ||
+		*entry.ExpiresAtMS != recordedAt.Add(time.Hour).UnixMilli() {
 		t.Fatalf("expired state payload = %#v", state)
 	}
 }
@@ -479,7 +481,7 @@ func TestCredentialStateRefreshUsesStateProxyPrecedence(t *testing.T) {
 	fixture, groupID, credentialID := newStateRefreshFixture(t)
 	now := time.UnixMilli(1_800_000_000_000)
 	fixture.service.now = func() time.Time { return now }
-	complete := turnstatetest.Token(now.Add(time.Hour))
+	complete := turnstatetest.Value(0)
 	probed := make(chan subscriptionruntime.StateProbeRequest, 4)
 	fixture.service.probeSubscriptionTurnState = func(
 		_ context.Context,
@@ -587,8 +589,8 @@ func TestCredentialStateRefreshIsolatesModels(t *testing.T) {
 	now := time.UnixMilli(1_800_000_000_000)
 	fixture.service.now = func() time.Time { return now }
 	captures := map[string]string{
-		stateRefreshTestModel:  turnstatetest.Token(now.Add(time.Hour)),
-		stateRefreshOtherModel: turnstatetest.Token(now.Add(2 * time.Hour)),
+		stateRefreshTestModel:  turnstatetest.Value(0),
+		stateRefreshOtherModel: turnstatetest.Value(1),
 	}
 	entered := make(chan string, 2)
 	release := make(chan struct{})

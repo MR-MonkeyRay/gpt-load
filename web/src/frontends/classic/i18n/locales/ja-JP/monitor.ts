@@ -945,6 +945,7 @@ export default {
         time: '時刻',
         modelProtocol: 'モデル / プロトコル',
         state: 'State',
+        stateLength: 'State 長さ',
         response: '応答',
         cost: 'コスト',
         tokens: 'Tokens',

@@ -278,12 +278,13 @@ func queryCredentials(ctx context.Context, db *gorm.DB) ([]models.Credential, er
 
 // queryTurnStateCaptures loads every persisted turn state grouped by credential,
 // optionally limited to one group. Turn state is runtime state that belongs to a
-// credential and a model, so it is loaded separately from credential identity.
+// credential and a model, so it is loaded separately from credential identity;
+// each capture carries the record time its replay expiry is derived from.
 func queryTurnStateCaptures(
 	ctx context.Context,
 	db *gorm.DB,
 	groupID uint,
-) (map[uint]map[string]string, error) {
+) (map[uint]map[string]state.TurnState, error) {
 	query := db.WithContext(ctx).Model(&models.CredentialTurnState{})
 	if groupID != 0 {
 		query = query.Where("credential_id IN (?)",
@@ -294,12 +295,12 @@ func queryTurnStateCaptures(
 	if err := query.Order("credential_id ASC").Find(&rows).Error; err != nil {
 		return nil, fmt.Errorf("query credential turn states: %w", err)
 	}
-	captures := make(map[uint]map[string]string, len(rows))
+	captures := make(map[uint]map[string]state.TurnState, len(rows))
 	for _, row := range rows {
 		if captures[row.CredentialID] == nil {
-			captures[row.CredentialID] = make(map[string]string, 1)
+			captures[row.CredentialID] = make(map[string]state.TurnState, 1)
 		}
-		captures[row.CredentialID][row.Model] = row.TurnState
+		captures[row.CredentialID][row.Model] = state.NewTurnState(row.TurnState, row.RefreshedAtMS)
 	}
 	return captures, nil
 }
@@ -834,7 +835,7 @@ func mapCredentialConfigs(
 func mapCredentials(
 	rows []models.Credential,
 	groups []models.Group,
-	turnStates map[uint]map[string]string,
+	turnStates map[uint]map[string]state.TurnState,
 ) []state.CredentialEntry {
 	targets := credentialTargets(groups)
 	result := make([]state.CredentialEntry, 0, len(rows))
@@ -860,7 +861,7 @@ func mapCredentials(
 func mapCredentialsWithProxy(
 	rows []models.Credential,
 	groups []models.Group,
-	turnStates map[uint]map[string]string,
+	turnStates map[uint]map[string]state.TurnState,
 	encryptionService encryption.Service,
 ) ([]state.CredentialEntry, error) {
 	entries := mapCredentials(rows, groups, turnStates)

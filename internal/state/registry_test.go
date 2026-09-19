@@ -9,7 +9,6 @@ import (
 	"testing"
 	"time"
 
-	"gpt-load/internal/execution"
 	providerobservation "gpt-load/internal/subscription/providers/observation"
 	"gpt-load/internal/testutil/turnstatetest"
 )
@@ -1347,9 +1346,9 @@ func keyStatus(t *testing.T, registry *CredentialRegistry, credentialID uint) Cr
 	return registry.buckets[groupID][credentialID].Status
 }
 
-// A captured turn state is replayed only for the model it was captured for,
-// one credential keeps captures for several models at once, and the replay
-// value never outlives the expiry it carries.
+// A captured turn state is replayed only for the model it was captured for, one
+// credential keeps captures for several models at once, and the replay value
+// never outlives one hour from the time it was recorded.
 func TestCredentialTurnStateIsBoundToModelAndExpiry(t *testing.T) {
 	registry := NewCredentialRegistry()
 	now := time.Date(2026, time.September, 18, 12, 0, 0, 0, time.UTC)
@@ -1363,16 +1362,16 @@ func TestCredentialTurnStateIsBoundToModelAndExpiry(t *testing.T) {
 		t.Fatalf("unpublished reference = %#v, found = %t", ref, ok)
 	}
 
-	first := turnstatetest.Token(now.Add(time.Hour))
-	if !registry.SetCredentialTurnState(1, "gpt-6-astra", first) {
+	first := turnstatetest.Value(0)
+	if !registry.SetCredentialTurnState(1, "gpt-6-astra", first, now.UnixMilli()) {
 		t.Fatal("SetCredentialTurnState() did not publish the value")
 	}
-	// 同一凭据的不同模型各自保存，互不覆盖。
-	second := turnstatetest.Token(now.Add(2 * time.Hour))
-	if !registry.SetCredentialTurnState(1, "gpt-5-codex", second) {
+	// 同一凭据的不同模型各自保存，互不覆盖；记录时间更晚的捕获有效期也更晚。
+	second := turnstatetest.Value(1)
+	if !registry.SetCredentialTurnState(1, "gpt-5-codex", second, now.Add(time.Hour).UnixMilli()) {
 		t.Fatal("SetCredentialTurnState() did not publish the second model")
 	}
-	if registry.SetCredentialTurnState(1, "  ", first) {
+	if registry.SetCredentialTurnState(1, "  ", first, now.UnixMilli()) {
 		t.Fatal("SetCredentialTurnState() accepted a blank model")
 	}
 	ref, _ = registry.CredentialRef(1)
@@ -1393,18 +1392,23 @@ func TestCredentialTurnStateIsBoundToModelAndExpiry(t *testing.T) {
 		t.Fatalf("unexpected blacklisted references = %#v", blacklisted)
 	}
 
+	// 有效期是记录时间 + 1 小时：第一张正好过期，第二张还剩半小时。
 	now = now.Add(90 * time.Minute)
 	ref, _ = registry.CredentialRef(1)
 	if ref.TurnStateFor("gpt-6-astra", now) != "" || ref.TurnStateFor("gpt-5-codex", now) != second {
 		t.Fatalf("expired reference = %#v", ref)
 	}
+	now = now.Add(31 * time.Minute)
+	if ref, _ := registry.CredentialRef(1); ref.TurnStateFor("gpt-5-codex", now) != "" {
+		t.Fatalf("outlived reference = %#v", ref)
+	}
 
-	// 长度正确但无法解析有效期的值同样不可复用。
-	if !registry.SetCredentialTurnState(1, "gpt-6-astra", strings.Repeat("s", execution.CodexTurnStateLength)) {
+	// 没有记录时间的捕获无法证明有效期，绝不参与回放。
+	if !registry.SetCredentialTurnState(1, "gpt-6-astra", turnstatetest.Value(0), 0) {
 		t.Fatal("SetCredentialTurnState() did not publish the value")
 	}
 	if ref, _ := registry.CredentialRef(1); ref.TurnStateFor("gpt-6-astra", now) != "" {
-		t.Fatalf("unreadable reference = %#v", ref)
+		t.Fatalf("undated reference = %#v", ref)
 	}
 }
 
@@ -1418,7 +1422,7 @@ func TestCredentialRefIdentityIgnoresTurnStates(t *testing.T) {
 		Fingerprint: "test-fingerprint", EncryptedValue: "cipher-one",
 	}})
 	before, _ := registry.CredentialRef(1)
-	if !registry.SetCredentialTurnState(1, "gpt-6-astra", turnstatetest.Token(now.Add(time.Hour))) {
+	if !registry.SetCredentialTurnState(1, "gpt-6-astra", turnstatetest.Value(0), now.UnixMilli()) {
 		t.Fatal("SetCredentialTurnState() did not publish the value")
 	}
 	after, _ := registry.CredentialRef(1)

@@ -80,20 +80,29 @@ func TestTurnStateInjectionFollowsTheResolvedModel(t *testing.T) {
 // A captured turn state reaches the upstream request and the request log only
 // for the model it was captured for, and only while it is still valid.
 func TestHandlerRecordsInjectedTurnStateOnlyForItsModel(t *testing.T) {
-	validState := turnstatetest.Token(time.Now().Add(time.Hour))
-	expiredState := turnstatetest.Token(time.Now().Add(-time.Minute))
+	captured := turnstatetest.Value(0)
 	for _, test := range []struct {
-		name       string
-		model      string
-		stateValue string
+		name  string
+		model string
+		// refreshedAtMS 是发布捕获时的记录时间：有效期由它 + 1 小时决定。
+		refreshedAtMS int64
 		// wantInput 是进入执行层的状态：过期值在注册表里就不会发布。
 		wantInput string
 		// wantValue 是请求日志记录的状态：只有目标模型会真正注入。
 		wantValue string
 	}{
-		{name: "captured model", model: execution.CodexTurnStateModel, stateValue: validState, wantInput: validState, wantValue: validState},
-		{name: "other model", model: "gpt-5", stateValue: validState, wantInput: "", wantValue: ""},
-		{name: "expired state", model: execution.CodexTurnStateModel, stateValue: expiredState, wantInput: "", wantValue: ""},
+		{
+			name: "captured model", model: execution.CodexTurnStateModel,
+			refreshedAtMS: time.Now().UnixMilli(), wantInput: captured, wantValue: captured,
+		},
+		{
+			name: "other model", model: "gpt-5",
+			refreshedAtMS: time.Now().UnixMilli(), wantInput: "", wantValue: "",
+		},
+		{
+			name: "expired state", model: execution.CodexTurnStateModel,
+			refreshedAtMS: time.Now().Add(-2 * time.Hour).UnixMilli(), wantInput: "", wantValue: "",
+		},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			forwarder := &scriptedForwarder{results: []UpstreamResult{{
@@ -104,7 +113,7 @@ func TestHandlerRecordsInjectedTurnStateOnlyForItsModel(t *testing.T) {
 			engine, _, _, registry := newRequestLogHandlerTestRuntimeWithModel(
 				t, forwarder, &recordingAccessKeyRPMLimiter{}, sink, test.model, "sk-first",
 			)
-			if !registry.SetCredentialTurnState(1, execution.CodexTurnStateModel, test.stateValue) {
+			if !registry.SetCredentialTurnState(1, execution.CodexTurnStateModel, captured, test.refreshedAtMS) {
 				t.Fatal("SetCredentialTurnState() did not publish the value")
 			}
 			request := httptest.NewRequest(

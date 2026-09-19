@@ -927,6 +927,7 @@ export default {
         time: '时间',
         modelProtocol: '模型/协议',
         state: 'State',
+        stateLength: 'State 长度',
         response: '响应',
         cost: '成本',
         tokens: 'Tokens',

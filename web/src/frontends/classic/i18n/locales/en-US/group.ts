@@ -568,13 +568,15 @@ export default {
         stopRefreshStateFailed: 'Unable to stop the state refresh',
         state: {
           title: 'State',
-          current: 'Current state',
           empty: 'Not recorded yet',
           runningModel: 'Refreshing',
           modelLabel: 'Model to refresh',
           modelsEmpty: 'The group has no configured model, so the state cannot be refreshed',
           recordedAt: 'Recorded at',
-          expiresAt: 'Valid until',
+          remaining: 'Valid for',
+          remainingHours: '{hours}h {minutes}m',
+          remainingMinutes: '{minutes}m {seconds}s',
+          remainingSeconds: '{seconds}s',
           expired: 'Expired',
           retained:
             'Only a {length}-character state is retained, and the record time is stored with it.',

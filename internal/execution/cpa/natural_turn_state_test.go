@@ -35,6 +35,11 @@ func completeTurnState() string {
 	return strings.Repeat("s", execution.CodexTurnStateLength)
 }
 
+// rotatedTurnState 是上游调整令牌长度后真实出现的形状（生产已观察到 312）。
+func rotatedTurnState() string {
+	return strings.Repeat("s", 312)
+}
+
 // An attempt that carried no state reports the complete state its upstream
 // returned, so the control plane can retain it for the same credential and
 // model. A replayed state, an incomplete header, and a header-less attempt never
@@ -47,6 +52,7 @@ func TestAdapterReportsNaturalTurnStateOnlyForAttemptsWithoutAReplayedState(t *t
 		want      string
 	}{
 		{name: "complete state", turnState: completeTurnState(), want: completeTurnState()},
+		{name: "upstream rotated length", turnState: rotatedTurnState(), want: rotatedTurnState()},
 		{name: "incomplete state", turnState: "short"},
 		{name: "missing state"},
 		{name: "replayed state", turnState: completeTurnState(), replayed: true},

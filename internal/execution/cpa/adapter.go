@@ -112,9 +112,9 @@ func (a *Adapter) recordObservedTurnState(
 	if a == nil || a.turnStates == nil || spec.TurnStateReplayed {
 		return
 	}
-	value, complete := execution.CompleteTurnState(turnState)
+	value, usable := execution.UsableTurnState(turnState)
 	model := execution.TurnStateModel(spec.UpstreamModel, spec.ClientModel)
-	if !complete || model == "" || spec.Credential.ID == 0 || spec.Credential.IdentityGeneration == 0 {
+	if !usable || model == "" || spec.Credential.ID == 0 || spec.Credential.IdentityGeneration == 0 {
 		return
 	}
 	a.turnStates.ObserveTurnState(execution.TurnStateObservation{

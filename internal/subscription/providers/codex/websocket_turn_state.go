@@ -17,7 +17,7 @@ var codexWebsocketMetadataKinds = map[string]struct{}{
 
 // WebsocketTurnState 读取 Codex WS 元数据事件 headers 里的 turn state。
 // HTTP/SSE 由响应头投递 state，WS 上游改由元数据事件投递，握手响应头不保证携带。
-// 事件本身不改动，返回值经 CompleteTurnState 判定长度后才可用。
+// 事件本身不改动，返回值经 UsableTurnState 判定为令牌后才入库。
 func WebsocketTurnState(payload []byte) string {
 	kind, err := jsonparser.GetString(payload, "type")
 	if err != nil {

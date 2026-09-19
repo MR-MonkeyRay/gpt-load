@@ -386,8 +386,11 @@ func (s *Service) ObserveTurnState(observation execution.TurnStateObservation) {
 	observation.TurnState = strings.TrimSpace(observation.TurnState)
 	observation.ProxyURL = strings.TrimSpace(observation.ProxyURL)
 	observation.BaseURL = strings.TrimSpace(observation.BaseURL)
-	if observation.CredentialID == 0 || observation.IdentityGeneration == 0 ||
-		observation.Model == "" || len(observation.TurnState) != execution.CodexTurnStateLength {
+	if observation.CredentialID == 0 || observation.IdentityGeneration == 0 || observation.Model == "" {
+		return
+	}
+	// 自然采集按令牌本身判定完整性，不绑定手动刷新的固定长度。
+	if _, usable := execution.UsableTurnState(observation.TurnState); !usable {
 		return
 	}
 	key := stateRefreshKey{credentialID: observation.CredentialID, model: observation.Model}
@@ -627,7 +630,9 @@ func (s *Service) probeCredentialTurnState(
 		return stop || stateRefreshFatalProbeError(probeErr), stateRefreshRateLimited(probeErr)
 	}
 	probe.outcome.StateLength = len(probed.TurnState)
-	if len(probed.TurnState) != execution.CodexTurnStateLength {
+	// 手动刷新保持固定长度契约：只有拿到恰好 292 的值才算捕获成功。
+	captured, complete := execution.CompleteTurnState(probed.TurnState)
+	if !complete {
 		return s.recordAttemptFailure(ctx, groupID, credentialID, probe.outcome, attempt,
 			stateRefreshLengthError{observed: len(probed.TurnState)}, startedAt), false
 	}
@@ -636,8 +641,8 @@ func (s *Service) probeCredentialTurnState(
 		GroupID:      groupID,
 		CredentialID: credentialID,
 		Status:       models.CredentialStateRefreshSucceeded,
-		TurnState:    probed.TurnState,
-		StateLength:  len(probed.TurnState),
+		TurnState:    captured,
+		StateLength:  len(captured),
 		Attempts:     attempt,
 		Model:        probe.outcome.Model,
 		Input:        probe.outcome.Input,
@@ -646,7 +651,7 @@ func (s *Service) probeCredentialTurnState(
 		DurationMS:   stateRefreshDurationMS(s.now(), startedAt),
 		CreatedAtMS:  refreshedAtMS,
 	}
-	if err := s.persistCredentialTurnState(ctx, groupID, credentialID, model, probed.TurnState, refreshedAtMS, record, nil); err != nil {
+	if err := s.persistCredentialTurnState(ctx, groupID, credentialID, model, captured, refreshedAtMS, record, nil); err != nil {
 		s.logStateRefreshFailure(groupID, credentialID, err)
 	}
 	return true, false

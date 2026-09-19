@@ -14,11 +14,6 @@ func Up0018(db *gorm.DB) error {
 	if err := ValidateRecoverable0018(db); err != nil {
 		return err
 	}
-	if !db.Migrator().HasColumn("credentials", "turn_state") {
-		if err := db.Exec("ALTER TABLE credentials ADD COLUMN turn_state VARCHAR(512) NOT NULL DEFAULT ''").Error; err != nil {
-			return fmt.Errorf("add credential turn state: %w", err)
-		}
-	}
 	if !db.Migrator().HasColumn("request_logs", "turn_state") {
 		if err := db.Exec("ALTER TABLE request_logs ADD COLUMN turn_state VARCHAR(512) NOT NULL DEFAULT ''").Error; err != nil {
 			return fmt.Errorf("add request log turn state: %w", err)
@@ -29,22 +24,16 @@ func Up0018(db *gorm.DB) error {
 
 // ValidateRecoverable0018 接受原子加列前后的状态，以支持 MySQL 的 DDL 中断恢复。
 func ValidateRecoverable0018(db *gorm.DB) error {
-	if !db.Migrator().HasTable("credentials") {
-		return fmt.Errorf("credentials table is missing")
-	}
 	if !db.Migrator().HasTable("request_logs") {
 		return fmt.Errorf("request_logs table is missing")
 	}
-	if db.Migrator().HasColumn("credentials", "turn_state") && db.Migrator().HasColumn("request_logs", "turn_state") {
+	if db.Migrator().HasColumn("request_logs", "turn_state") {
 		return Validate0018(db)
 	}
 	return nil
 }
 
 func Validate0018(db *gorm.DB) error {
-	if err := validateTurnStateColumn0018(db, "credentials"); err != nil {
-		return err
-	}
 	return validateTurnStateColumn0018(db, "request_logs")
 }
 

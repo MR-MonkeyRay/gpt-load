@@ -27,6 +27,7 @@ import type {
   CredentialRecoveryDto,
   CredentialRevealDto,
   CredentialStateDto,
+  CredentialStateModelDto,
   CredentialStateRecordDto,
   CredentialStatus,
   CredentialSummaryDto,
@@ -188,13 +189,20 @@ const observationSnapshotFields = [
   'reset_credits',
 ] as const
 const stateRefreshFields = [
-  'turn_state',
-  'turn_state_length',
   'required_length',
+  'available_models',
+  'model',
+  'running',
+  'states',
+  'logs',
+] as const
+const stateModelFields = [
+  'model',
+  'turn_state',
+  'state_length',
   'refreshed_at_ms',
   'expires_at_ms',
   'running',
-  'logs',
 ] as const
 const stateRecordFields = [
   'id',
@@ -534,13 +542,25 @@ function projectCredentialStateRefresh(value: unknown): CredentialStateDto {
   const record = projectRecord(value)
   assertNoSecretLikeFields(record, stateRefreshFields)
   return {
-    turn_state: projectString(record.turn_state, { allowEmpty: true }),
-    turn_state_length: projectSafeInteger(record.turn_state_length, { minimum: 0 }),
     required_length: projectSafeInteger(record.required_length, { minimum: 1 }),
+    available_models: projectArray(record.available_models, (model) => projectString(model)),
+    model: projectString(record.model, { allowEmpty: true }),
+    running: projectBoolean(record.running),
+    states: projectArray(record.states, projectCredentialStateModel),
+    logs: projectArray(record.logs, projectCredentialStateRecord),
+  }
+}
+
+function projectCredentialStateModel(value: unknown): CredentialStateModelDto {
+  const record = projectRecord(value)
+  assertNoSecretLikeFields(record, stateModelFields)
+  return {
+    model: projectString(record.model),
+    turn_state: projectString(record.turn_state, { allowEmpty: true }),
+    state_length: projectSafeInteger(record.state_length, { minimum: 0 }),
     refreshed_at_ms: projectNullableEpochMilliseconds(record.refreshed_at_ms),
     expires_at_ms: projectNullableEpochMilliseconds(record.expires_at_ms),
     running: projectBoolean(record.running),
-    logs: projectArray(record.logs, projectCredentialStateRecord),
   }
 }
 
@@ -1039,17 +1059,30 @@ export async function refreshCredentialObservation(
   )
 }
 
+// State 归属于「凭据 + 模型」，因此三个动词都带上所选的模型；缺省由服务端挑默认模型。
+function credentialStateRefreshURL(
+  groupId: number,
+  credentialId: number,
+  model: string,
+): `/api/${string}` {
+  const params = new URLSearchParams()
+  if (model !== '') params.set('model', model)
+  const suffix = params.size > 0 ? `?${params.toString()}` : ''
+  return `/api/groups/${groupId}/credentials/${credentialId}/state-refresh${suffix}`
+}
+
 /** 启动后台刷新运行，立即返回当前快照（running 为真）。 */
 export async function refreshCredentialState(
   client: ApiClient,
   groupId: number,
   credentialId: number,
+  model: string,
   signal?: AbortSignal,
 ): Promise<CredentialStateDto> {
   return projectCredentialStateRefresh(
-    await client.request(`/api/groups/${groupId}/credentials/${credentialId}/state-refresh`, {
+    await client.request(credentialStateRefreshURL(groupId, credentialId, model), {
       method: 'POST',
-      json: {},
+      json: { model },
       signal,
     }),
   )
@@ -1060,10 +1093,11 @@ export async function stopCredentialStateRefresh(
   client: ApiClient,
   groupId: number,
   credentialId: number,
+  model: string,
   signal?: AbortSignal,
 ): Promise<CredentialStateDto> {
   return projectCredentialStateRefresh(
-    await client.request(`/api/groups/${groupId}/credentials/${credentialId}/state-refresh`, {
+    await client.request(credentialStateRefreshURL(groupId, credentialId, model), {
       method: 'DELETE',
       signal,
     }),
@@ -1074,10 +1108,11 @@ export async function getCredentialState(
   client: ApiClient,
   groupId: number,
   credentialId: number,
+  model: string,
   signal?: AbortSignal,
 ): Promise<CredentialStateDto> {
   return projectCredentialStateRefresh(
-    await client.request(`/api/groups/${groupId}/credentials/${credentialId}/state-refresh`, {
+    await client.request(credentialStateRefreshURL(groupId, credentialId, model), {
       signal,
     }),
   )

@@ -7,10 +7,12 @@ import (
 	"time"
 )
 
-// Codex turn state is a request-side header bound to one dedicated model. The
+// Codex turn state is a request-side header captured per upstream model: the
 // value is captured by a manual state refresh and replayed for that model only.
 const (
 	CodexTurnStateHeader = "X-Codex-Turn-State"
+	// CodexTurnStateModel is the model a state refresh selects by default; any
+	// model the group serves can be refreshed.
 	CodexTurnStateModel  = "gpt-6-astra"
 	CodexTurnStateLength = 292
 )

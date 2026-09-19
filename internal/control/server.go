@@ -543,7 +543,7 @@ func (s *Server) handleGetGroupCredentialState(c *gin.Context) {
 	if !ok {
 		return
 	}
-	result, err := s.service.GetCredentialState(c.Request.Context(), groupID, credentialID)
+	result, err := s.service.GetCredentialState(c.Request.Context(), groupID, credentialID, c.Query("model"))
 	if err != nil {
 		writeServiceError(c, "get_group_credential_state", err)
 		return
@@ -560,11 +560,12 @@ func (s *Server) handleRefreshGroupCredentialState(c *gin.Context) {
 	if !ok {
 		return
 	}
-	if err := bindOptionalEmptyJSONObject(c); err != nil {
+	var request CredentialStateRefreshRequest
+	if err := bindStrictJSON(c, &request); err != nil {
 		writeServiceError(c, "refresh_group_credential_state", mapControlJSONError(err))
 		return
 	}
-	result, err := s.service.StartCredentialStateRefresh(c.Request.Context(), groupID, credentialID)
+	result, err := s.service.StartCredentialStateRefresh(c.Request.Context(), groupID, credentialID, request.Model)
 	if err != nil {
 		writeServiceError(c, "refresh_group_credential_state", err)
 		return
@@ -581,7 +582,7 @@ func (s *Server) handleStopGroupCredentialState(c *gin.Context) {
 	if !ok {
 		return
 	}
-	result, err := s.service.StopCredentialStateRefresh(c.Request.Context(), groupID, credentialID)
+	result, err := s.service.StopCredentialStateRefresh(c.Request.Context(), groupID, credentialID, c.Query("model"))
 	if err != nil {
 		writeServiceError(c, "stop_group_credential_state", err)
 		return

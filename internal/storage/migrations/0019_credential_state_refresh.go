@@ -89,6 +89,19 @@ func Validate0019(db *gorm.DB) error {
 	if err := validateTurnStateRefreshedAt0019(db); err != nil {
 		return err
 	}
+	return validateStateRefreshLog0019(db)
+}
+
+// ValidateCurrent0019 复验已应用的 0019。0019 发布时加了单值列与刷新日志表，0020
+// 随后退休了那一列，因此列还在时按发布时的形态核对，列已退休时只核对日志表。
+func ValidateCurrent0019(db *gorm.DB) error {
+	if db.Migrator().HasColumn("credentials", "turn_state_refreshed_at_ms") {
+		return Validate0019(db)
+	}
+	return validateStateRefreshLog0019(db)
+}
+
+func validateStateRefreshLog0019(db *gorm.DB) error {
 	model := &stateRefreshLog0019{}
 	if !db.Migrator().HasTable(model) {
 		return fmt.Errorf("credential state refresh log table is missing")

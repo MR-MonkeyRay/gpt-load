@@ -46,12 +46,9 @@ type CredentialEntry struct {
 	EncryptedValue          string
 	EncryptedProxy          string
 	ProxyFingerprint        string
-	TurnState               string
-	// TurnStateExpiresAtMS is derived from the captured value itself and never
-	// persisted separately; 0 means the capture carries no readable expiry.
-	TurnStateExpiresAtMS int64
-	quotaRemaining       *float64
-	quotaResetAt         time.Time
+	TurnStates              TurnStates
+	quotaRemaining          *float64
+	quotaResetAt            time.Time
 }
 
 type CredentialMeta struct {
@@ -72,9 +69,32 @@ type CredentialRef struct {
 	EncryptedValue          string
 	EncryptedProxy          string
 	ProxyFingerprint        string
-	TurnState               string
+	TurnStates              TurnStates
 	FailureGeneration       uint64
 	ModelCooldownGeneration uint64
+}
+
+// TurnStateFor returns the turn state captured for one upstream model while its
+// embedded expiry is still in the future.
+func (ref CredentialRef) TurnStateFor(model string, now time.Time) string {
+	return ref.TurnStates.Valid(model, now)
+}
+
+// SameIdentity reports whether two references describe the same credential
+// identity. Captured turn states are mutable runtime state and never take part
+// in identity, so a refresh cannot invalidate a reference that already holds
+// one.
+func (ref CredentialRef) SameIdentity(other CredentialRef) bool {
+	return ref.ID == other.ID &&
+		ref.GroupID == other.GroupID &&
+		ref.Version == other.Version &&
+		ref.IdentityGeneration == other.IdentityGeneration &&
+		ref.Fingerprint == other.Fingerprint &&
+		ref.EncryptedValue == other.EncryptedValue &&
+		ref.EncryptedProxy == other.EncryptedProxy &&
+		ref.ProxyFingerprint == other.ProxyFingerprint &&
+		ref.FailureGeneration == other.FailureGeneration &&
+		ref.ModelCooldownGeneration == other.ModelCooldownGeneration
 }
 
 type CredentialRegistry struct {
@@ -103,15 +123,6 @@ func (r *CredentialRegistry) currentTime() time.Time {
 	return r.now()
 }
 
-// validTurnState returns the published turn state while its embedded expiry is
-// still in the future. A capture whose expiry cannot be read is never replayed.
-func (entry *CredentialEntry) validTurnState(now time.Time) string {
-	if entry == nil || entry.TurnState == "" || entry.TurnStateExpiresAtMS <= now.UnixMilli() {
-		return ""
-	}
-	return entry.TurnState
-}
-
 func ValidateCredentialEntries(entries []CredentialEntry) error {
 	seen := make(map[uint]struct{}, len(entries))
 	for _, entry := range entries {
@@ -135,6 +146,14 @@ func ValidateCredentialEntries(entries []CredentialEntry) error {
 		}
 		if (entry.EncryptedProxy == "") != (entry.ProxyFingerprint == "") {
 			return fmt.Errorf("credential %d proxy identity is incomplete", entry.ID)
+		}
+		for model, capture := range entry.TurnStates {
+			if strings.TrimSpace(model) == "" {
+				return fmt.Errorf("credential %d turn state model is required", entry.ID)
+			}
+			if capture.Value == "" {
+				return fmt.Errorf("credential %d turn state for model %q is empty", entry.ID, model)
+			}
 		}
 		if entry.Version == 0 {
 			return fmt.Errorf("credential %d version is required", entry.ID)
@@ -569,13 +588,17 @@ func (r *CredentialRegistry) SetCredentialAuthState(credentialID uint, authState
 	return true
 }
 
-// SetCredentialTurnState publishes a captured turn state for one credential.
-// The value is mutable runtime state and intentionally not part of credential
-// identity, so in-flight requests are never invalidated by a refresh. The
-// replay expiry is derived from the value itself and replayed only while it is
-// still in the future.
-func (r *CredentialRegistry) SetCredentialTurnState(credentialID uint, turnState string) bool {
+// SetCredentialTurnState publishes a captured turn state for one credential and
+// one upstream model. The value is mutable runtime state and intentionally not
+// part of credential identity, so in-flight requests are never invalidated by a
+// refresh. The replay expiry is derived from the value itself and replayed only
+// while it is still in the future, and only for the model it was captured for.
+func (r *CredentialRegistry) SetCredentialTurnState(credentialID uint, model, turnState string) bool {
 	if credentialID == 0 {
+		return false
+	}
+	model = strings.TrimSpace(model)
+	if model == "" {
 		return false
 	}
 	r.mu.Lock()
@@ -584,8 +607,7 @@ func (r *CredentialRegistry) SetCredentialTurnState(credentialID uint, turnState
 	if !ok {
 		return false
 	}
-	entry.TurnState = turnState
-	entry.TurnStateExpiresAtMS = execution.TurnStateExpiryMS(turnState)
+	entry.TurnStates = entry.TurnStates.WithCapture(model, turnState, execution.TurnStateExpiryMS(turnState))
 	return true
 }
 
@@ -635,7 +657,6 @@ func (r *CredentialRegistry) CaptureActiveCredentialRefs(groupIDs []uint) []Cred
 	}
 
 	r.mu.RLock()
-	now := r.currentTime()
 	refs := make([]CredentialRef, 0)
 	for groupID := range selectedGroups {
 		for _, entry := range r.buckets[groupID] {
@@ -647,7 +668,7 @@ func (r *CredentialRegistry) CaptureActiveCredentialRefs(groupIDs []uint) []Cred
 				Version: entry.Version, IdentityGeneration: entry.IdentityGeneration,
 				Fingerprint: entry.Fingerprint, EncryptedValue: entry.EncryptedValue,
 				EncryptedProxy: entry.EncryptedProxy, ProxyFingerprint: entry.ProxyFingerprint,
-				TurnState:               entry.validTurnState(now),
+				TurnStates:              entry.TurnStates,
 				FailureGeneration:       entry.FailureGeneration,
 				ModelCooldownGeneration: entry.ModelCooldownGeneration,
 			})
@@ -716,7 +737,7 @@ func (r *CredentialRegistry) CredentialRef(credentialID uint) (CredentialRef, bo
 		ID: entry.ID, GroupID: entry.GroupID, Version: entry.Version,
 		IdentityGeneration: entry.IdentityGeneration, Fingerprint: entry.Fingerprint,
 		EncryptedValue: entry.EncryptedValue, EncryptedProxy: entry.EncryptedProxy,
-		ProxyFingerprint: entry.ProxyFingerprint, TurnState: entry.validTurnState(r.currentTime()),
+		ProxyFingerprint: entry.ProxyFingerprint, TurnStates: entry.TurnStates,
 		FailureGeneration:       entry.FailureGeneration,
 		ModelCooldownGeneration: entry.ModelCooldownGeneration,
 	}, true
@@ -1039,7 +1060,6 @@ func (r *CredentialRegistry) restoreRuntimeStateIfMatch(
 
 func (r *CredentialRegistry) BlacklistedCredentials() []CredentialRef {
 	r.mu.RLock()
-	now := r.currentTime()
 	refs := make([]CredentialRef, 0)
 	for _, bucket := range r.buckets {
 		for _, entry := range bucket {
@@ -1051,7 +1071,7 @@ func (r *CredentialRegistry) BlacklistedCredentials() []CredentialRef {
 				Version: entry.Version, IdentityGeneration: entry.IdentityGeneration,
 				Fingerprint: entry.Fingerprint, EncryptedValue: entry.EncryptedValue,
 				EncryptedProxy: entry.EncryptedProxy, ProxyFingerprint: entry.ProxyFingerprint,
-				TurnState:               entry.validTurnState(now),
+				TurnStates:              entry.TurnStates,
 				FailureGeneration:       entry.FailureGeneration,
 				ModelCooldownGeneration: entry.ModelCooldownGeneration,
 			})

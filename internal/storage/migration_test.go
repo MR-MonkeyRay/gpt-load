@@ -31,6 +31,7 @@ func TestMigrationRegistryContainsOrderedMigrations(t *testing.T) {
 		migrationfiles.ID0017,
 		migrationfiles.ID0018,
 		migrationfiles.ID0019,
+		migrationfiles.ID0020,
 	}
 	if len(migrations) != len(wantIDs) {
 		t.Fatalf("migration registry length = %d, want %d", len(migrations), len(wantIDs))
@@ -77,6 +78,65 @@ func TestApplyMigrationRegistryRejectsOutOfOrderEntries(t *testing.T) {
 	err := applyMigrationRegistry(openInternalMigrationTestDatabase(t), entries)
 	if err == nil || !strings.Contains(err.Error(), "migration registry entry 1") {
 		t.Fatalf("applyMigrationRegistry() error = %v, want out-of-order registry rejection", err)
+	}
+}
+
+// TestAutoMigrateUpgradesShippedStateRefreshSchema 保证停在 0019 的库（单值 state 列 +
+// 刷新日志表，没有按模型捕获表）能直接升级：0020 补齐捕获表并退休单值列，已有数据不动。
+func TestAutoMigrateUpgradesShippedStateRefreshSchema(t *testing.T) {
+	t.Parallel()
+	db := openInternalMigrationTestDatabase(t)
+	if err := AutoMigrate(db); err != nil {
+		t.Fatalf("first AutoMigrate() error = %v", err)
+	}
+	// 退回 0019 发布后的形态：删掉 0020 的账本行与捕获表，恢复两个单值列。
+	for _, statement := range []string{
+		"DROP TABLE credential_turn_states",
+		"DELETE FROM schema_migrations WHERE id = '0020_credential_turn_states'",
+		"ALTER TABLE credentials ADD COLUMN turn_state VARCHAR(512) NOT NULL DEFAULT ''",
+		"ALTER TABLE credentials ADD COLUMN turn_state_refreshed_at_ms BIGINT NOT NULL DEFAULT 0",
+	} {
+		if err := db.Exec(statement).Error; err != nil {
+			t.Fatalf("rewind to the shipped 0019 schema: %v", err)
+		}
+	}
+	if err := db.Exec(`INSERT INTO groups (id, name, channel_id, connection_type, params, models, enabled, created_at_ms, updated_at_ms)
+		VALUES (1, 'group', 'codex', 'subscription', '{}', '[]', 1, 1, 1)`).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Exec(`INSERT INTO credentials (id, group_id, data, fingerprint, identity_fingerprint, status, turn_state, created_at_ms, updated_at_ms)
+		VALUES (1, 1, 'cipher', 'fingerprint', 'identity', 'active', 'legacy-state', 1, 1)`).Error; err != nil {
+		t.Fatal(err)
+	}
+
+	if err := AutoMigrate(db); err != nil {
+		t.Fatalf("AutoMigrate() over the shipped schema error = %v", err)
+	}
+	if !db.Migrator().HasTable("credential_turn_states") {
+		t.Fatal("per-model capture table is missing after the upgrade")
+	}
+	for _, column := range []string{"turn_state", "turn_state_refreshed_at_ms"} {
+		if db.Migrator().HasColumn("credentials", column) {
+			t.Fatalf("credentials column %s survived the upgrade", column)
+		}
+	}
+	var state string
+	if err := db.Raw("SELECT data FROM credentials WHERE id = 1").Scan(&state).Error; err != nil {
+		t.Fatal(err)
+	}
+	if state != "cipher" {
+		t.Fatalf("credential data after the upgrade = %q", state)
+	}
+	var last string
+	if err := db.Table("schema_migrations").Order("id DESC").Limit(1).Pluck("id", &last).Error; err != nil {
+		t.Fatal(err)
+	}
+	if last != migrationfiles.ID0020 {
+		t.Fatalf("last migration after the upgrade = %q", last)
+	}
+	// 升级后的库在下次启动时会重新复验已应用的 0019，而单值列已经不在。
+	if err := AutoMigrate(db); err != nil {
+		t.Fatalf("AutoMigrate() over the upgraded schema error = %v", err)
 	}
 }
 

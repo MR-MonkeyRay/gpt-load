@@ -15,8 +15,10 @@ import (
 	"gpt-load/internal/testutil/turnstatetest"
 )
 
-// The stored turn state must only ever reach the model it was captured for.
-func TestTurnStateInjectionIsBoundToTheStatsModel(t *testing.T) {
+// A captured turn state reaches the upstream request only for the model it was
+// resolved for: the handler picks the value by model, the execution layer only
+// injects what it was given.
+func TestTurnStateInjectionFollowsTheResolvedModel(t *testing.T) {
 	base := func() ForwardInput {
 		return ForwardInput{
 			Dialect:         dialect.NewOpenAIResponses(),
@@ -33,6 +35,21 @@ func TestTurnStateInjectionIsBoundToTheStatsModel(t *testing.T) {
 			Credential:      execution.NewCredentialSnapshot(7, 1, 1, []byte(`{"access_token":"token"}`)),
 		}
 	}
+	// 解析模型时上游模型优先，缺省时回退到外部模型。
+	for _, test := range []struct {
+		upstream string
+		external string
+		want     string
+	}{
+		{upstream: "gpt-5-codex", external: "gpt-6-astra", want: "gpt-5-codex"},
+		{upstream: "", external: "gpt-6-astra", want: "gpt-6-astra"},
+		{upstream: "", external: "", want: ""},
+	} {
+		if got := TurnStateModel(test.upstream, test.external); got != test.want {
+			t.Fatalf("TurnStateModel(%q, %q) = %q, want %q", test.upstream, test.external, got, test.want)
+		}
+	}
+
 	input := base()
 	input.UpstreamModelID = "gpt-6-astra"
 	input.CredentialTurnState = "state-value"
@@ -44,26 +61,7 @@ func TestTurnStateInjectionIsBoundToTheStatsModel(t *testing.T) {
 		t.Fatalf("injected header = %q, want state-value", got)
 	}
 
-	other := base()
-	other.UpstreamModelID = "gpt-5"
-	other.CredentialTurnState = "state-value"
-	spec, err = newExecutionAttemptSpec(other)
-	if err != nil {
-		t.Fatalf("spec error = %v", err)
-	}
-	if got := spec.Header.Get(execution.CodexTurnStateHeader); got != "" {
-		t.Fatalf("header leaked for other model: %q", got)
-	}
-
-	// External-model fallback (no explicit upstream model) still resolves the
-	// value for injection.
-	fallback := base()
-	fallback.CredentialTurnState = "state-value"
-	if got := turnStateHeaderValue(fallback); got != "state-value" {
-		t.Fatalf("fallback model value = %q, want state-value", got)
-	}
-
-	// Empty credential state never injects.
+	// 没有解析出捕获值的请求绝不注入。
 	empty := base()
 	empty.UpstreamModelID = "gpt-6-astra"
 	spec, err = newExecutionAttemptSpec(empty)
@@ -79,9 +77,9 @@ func TestTurnStateInjectionIsBoundToTheStatsModel(t *testing.T) {
 	}
 }
 
-// The stored turn state must reach the upstream request and the request log
-// only for the model it was captured for, and only while it is still valid.
-func TestHandlerRecordsInjectedTurnStateOnlyForTheStatsModel(t *testing.T) {
+// A captured turn state reaches the upstream request and the request log only
+// for the model it was captured for, and only while it is still valid.
+func TestHandlerRecordsInjectedTurnStateOnlyForItsModel(t *testing.T) {
 	validState := turnstatetest.Token(time.Now().Add(time.Hour))
 	expiredState := turnstatetest.Token(time.Now().Add(-time.Minute))
 	for _, test := range []struct {
@@ -93,8 +91,8 @@ func TestHandlerRecordsInjectedTurnStateOnlyForTheStatsModel(t *testing.T) {
 		// wantValue 是请求日志记录的状态：只有目标模型会真正注入。
 		wantValue string
 	}{
-		{name: "stats model", model: execution.CodexTurnStateModel, stateValue: validState, wantInput: validState, wantValue: validState},
-		{name: "other model", model: "gpt-5", stateValue: validState, wantInput: validState, wantValue: ""},
+		{name: "captured model", model: execution.CodexTurnStateModel, stateValue: validState, wantInput: validState, wantValue: validState},
+		{name: "other model", model: "gpt-5", stateValue: validState, wantInput: "", wantValue: ""},
 		{name: "expired state", model: execution.CodexTurnStateModel, stateValue: expiredState, wantInput: "", wantValue: ""},
 	} {
 		t.Run(test.name, func(t *testing.T) {
@@ -106,7 +104,7 @@ func TestHandlerRecordsInjectedTurnStateOnlyForTheStatsModel(t *testing.T) {
 			engine, _, _, registry := newRequestLogHandlerTestRuntimeWithModel(
 				t, forwarder, &recordingAccessKeyRPMLimiter{}, sink, test.model, "sk-first",
 			)
-			if !registry.SetCredentialTurnState(1, test.stateValue) {
+			if !registry.SetCredentialTurnState(1, execution.CodexTurnStateModel, test.stateValue) {
 				t.Fatal("SetCredentialTurnState() did not publish the value")
 			}
 			request := httptest.NewRequest(

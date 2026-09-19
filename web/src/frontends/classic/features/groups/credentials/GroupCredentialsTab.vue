@@ -141,6 +141,8 @@ const credentialStates = ref(new Map<number, CredentialStateDto>())
 const stateErrors = ref(new Map<number, string>())
 const stateLoadingIDs = ref(new Set<number>())
 const statePollTimers = new Map<number, number>()
+// 同一凭据只展示一份快照：新的读取取代在途读取，避免切换模型时旧快照回填。
+const stateReadControllers = new Map<number, AbortController>()
 const observationErrors = ref(new Map<number, string>())
 const batchObservationPending = ref(new Set<number>())
 const feedback = ref('')
@@ -549,12 +551,18 @@ function clearDetailState(id: number): void {
 // 凭据数据变化后已保留的 State 可能过期，丢弃记录以便下次展开重新读取。
 function clearCredentialState(id: number): void {
   stopStatePolling(id)
+  stateReadControllers.get(id)?.abort()
+  stateReadControllers.delete(id)
   const states = new Map(credentialStates.value)
   states.delete(id)
   credentialStates.value = states
   const errors = new Map(stateErrors.value)
   errors.delete(id)
   stateErrors.value = errors
+  // 被取代的读取不再自行收尾，这里一并撤下它的加载态。
+  const loading = new Set(stateLoadingIDs.value)
+  loading.delete(id)
+  stateLoadingIDs.value = loading
 }
 function credentialState(id: number): CredentialStateDto | undefined {
   return credentialStates.value.get(id)
@@ -565,7 +573,7 @@ function stateLoading(id: number): boolean {
 function stateError(id: number): string {
   return stateErrors.value.get(id) ?? ''
 }
-// 运行状态完全来自服务端快照：running 为真时按固定间隔重读，快照报告运行结束后立即停止。
+// 运行状态完全来自服务端快照：还有模型在刷新时按固定间隔重读，快照报告全部结束后立即停止。
 function stopStatePolling(id: number): void {
   const timer = statePollTimers.get(id)
   if (timer === undefined) return
@@ -579,7 +587,9 @@ function applyCredentialState(id: number, state: CredentialStateDto): void {
   const next = new Map(credentialStates.value)
   next.set(id, state)
   credentialStates.value = next
-  if (!state.running) {
+  // 快照里的运行状态逐模型给出：只要还有模型在刷新就继续重读，其他模型的进度才跟得上。
+  const anyRunning = state.running || state.states.some((entry) => entry.running)
+  if (!anyRunning) {
     stopStatePolling(id)
     return
   }
@@ -591,17 +601,35 @@ function applyCredentialState(id: number, state: CredentialStateDto): void {
     }, stateRefreshPollIntervalMS),
   )
 }
+function beginStateRead(id: number): AbortController {
+  stateReadControllers.get(id)?.abort()
+  const controller = new AbortController()
+  stateReadControllers.set(id, controller)
+  return controller
+}
 async function pollCredentialState(id: number): Promise<void> {
+  // 正在读取（切换模型或重试）时跳过本轮，读取始终由最新的选择驱动。
+  if (stateReadControllers.has(id)) return
+  // 轮询回读当前快照所属的模型，快照与请求始终指向同一个模型。
+  const model = credentialStates.value.get(id)?.model ?? ''
+  const controller = beginStateRead(id)
   try {
-    applyCredentialState(id, await getCredentialState(client, props.groupId, id))
+    const state = await getCredentialState(client, props.groupId, id, model, controller.signal)
+    if (stateReadControllers.get(id) === controller) applyCredentialState(id, state)
   } catch {
     // 单次轮询失败保留上一次快照，等下一次轮询再试。
+  } finally {
+    if (stateReadControllers.get(id) === controller) stateReadControllers.delete(id)
   }
 }
-// State 记录只在展开详情时读取。
-async function loadCredentialState(item: CredentialItemDto): Promise<void> {
-  const id = item.credential_id
-  if (stateLoadingIDs.value.has(id) || credentialStates.value.has(id)) return
+// State 记录只在展开详情时读取；切换模型时同一个入口重新读取该模型的快照。
+async function loadCredentialState(payload: {
+  item: CredentialItemDto
+  model: string
+}): Promise<void> {
+  const id = payload.item.credential_id
+  if (credentialStates.value.get(id)?.model === payload.model) return
+  const controller = beginStateRead(id)
   const errors = new Map(stateErrors.value)
   errors.delete(id)
   stateErrors.value = errors
@@ -609,15 +637,28 @@ async function loadCredentialState(item: CredentialItemDto): Promise<void> {
   loading.add(id)
   stateLoadingIDs.value = loading
   try {
-    applyCredentialState(id, await getCredentialState(client, props.groupId, id))
+    const state = await getCredentialState(
+      client,
+      props.groupId,
+      id,
+      payload.model,
+      controller.signal,
+    )
+    // 期间又切换了模型：这份快照已过期，交给后发读取回填。
+    if (stateReadControllers.get(id) !== controller) return
+    applyCredentialState(id, state)
   } catch {
+    if (stateReadControllers.get(id) !== controller) return
     const nextErrors = new Map(stateErrors.value)
     nextErrors.set(id, t('group.credentials.subscription.state.loadFailed'))
     stateErrors.value = nextErrors
   } finally {
-    const done = new Set(stateLoadingIDs.value)
-    done.delete(id)
-    stateLoadingIDs.value = done
+    if (stateReadControllers.get(id) === controller) {
+      stateReadControllers.delete(id)
+      const done = new Set(stateLoadingIDs.value)
+      done.delete(id)
+      stateLoadingIDs.value = done
+    }
   }
 }
 async function resolveCopyValue(id: number): Promise<string> {
@@ -827,19 +868,24 @@ async function refreshCredentialToken(item: CredentialItemDto): Promise<void> {
 }
 
 // 手动刷新只回填凭据的 turn_state，凭据行本身不变，因此不刷新列表也不改写缓存。
-// State 刷新在后台运行：同一个控件按服务端快照在启动与停止之间切换。
-async function toggleStateRefresh(item: CredentialItemDto): Promise<void> {
-  const id = item.credential_id
+// State 刷新在后台运行：同一个控件按服务端快照在启动与停止之间切换，运行与快照都属于同一个模型。
+async function toggleStateRefresh(payload: {
+  item: CredentialItemDto
+  model: string
+}): Promise<void> {
+  const id = payload.item.credential_id
   if (pending(id)) return
   feedback.value = ''
-  const running = credentialState(id)?.running === true
+  const state = credentialState(id)
+  // 快照属于某个模型：只有它正是当前选择的模型时，按钮才表示「停止」。
+  const running = state?.running === true && state.model === payload.model
   setPending(id, 'state-refresh', true)
   try {
     applyCredentialState(
       id,
       running
-        ? await stopCredentialStateRefresh(client, props.groupId, id)
-        : await refreshCredentialState(client, props.groupId, id),
+        ? await stopCredentialStateRefresh(client, props.groupId, id, payload.model)
+        : await refreshCredentialState(client, props.groupId, id, payload.model),
     )
     toast.show({
       message: t(

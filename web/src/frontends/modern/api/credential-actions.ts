@@ -115,15 +115,25 @@ export interface CredentialStateRefreshRecord {
   durationMs: number
   createdAt: number
 }
-export interface CredentialStateSnapshot {
+// CredentialStateModelState 是一个模型已保留的 state：同一凭据的每个模型各自刷新、互不影响。
+export interface CredentialStateModelState {
+  model: string
   turnState: string
-  turnStateLength: number
-  requiredLength: number
+  stateLength: number
   refreshedAt: number | null
   // expiresAt 是已保留 state 自身携带的有效期；为空表示解析不出有效期。
   expiresAt: number | null
+  running: boolean
+}
+export interface CredentialStateSnapshot {
+  requiredLength: number
+  // availableModels 是分组已配置的模型，也就是可以刷新的模型。
+  availableModels: string[]
+  // model 是本次回看的模型：请求未指定时由服务端选出默认模型。
+  model: string
   // running 由服务端给出：界面只跟随它切换启停与轮询，不自行计时。
   running: boolean
+  states: CredentialStateModelState[]
   logs: CredentialStateRefreshRecord[]
 }
 function readStateRefreshRecord(value: unknown): CredentialStateRefreshRecord {
@@ -144,62 +154,82 @@ function readStateRefreshRecord(value: unknown): CredentialStateRefreshRecord {
     createdAt: integer(row.created_at_ms, 1),
   }
 }
+function readStateModelState(value: unknown): CredentialStateModelState {
+  const row = record(value)
+  return {
+    model: text(row.model),
+    turnState: text(row.turn_state),
+    stateLength: integer(row.state_length),
+    refreshedAt:
+      row.refreshed_at_ms === null || row.refreshed_at_ms === undefined
+        ? null
+        : integer(row.refreshed_at_ms, 1),
+    expiresAt:
+      row.expires_at_ms === null || row.expires_at_ms === undefined
+        ? null
+        : integer(row.expires_at_ms, 1),
+    running: boolean(row.running),
+  }
+}
 function readCredentialStateSnapshot(value: unknown): CredentialStateSnapshot {
   const data = record(value)
   return {
-    turnState: text(data.turn_state),
-    turnStateLength: integer(data.turn_state_length),
     requiredLength: integer(data.required_length, 1),
-    refreshedAt:
-      data.refreshed_at_ms === null || data.refreshed_at_ms === undefined
-        ? null
-        : integer(data.refreshed_at_ms, 1),
-    expiresAt:
-      data.expires_at_ms === null || data.expires_at_ms === undefined
-        ? null
-        : integer(data.expires_at_ms, 1),
+    availableModels: list(data.available_models).map((model) => text(model)),
+    model: text(data.model),
     running: boolean(data.running),
+    states: list(data.states).map(readStateModelState),
     logs: list(data.logs).map(readStateRefreshRecord),
   }
 }
-// 只保留完整长度的 state，读取同时回看最近的刷新记录。
+// 一次回看的模型：为空表示交给服务端选默认模型，此时请求不带 model 查询参数。
+function stateRefreshQuery(model: string): string {
+  return model ? `?${new URLSearchParams({ model })}` : ''
+}
+// 回看指定模型的 state 与最近刷新记录，未指定模型时由服务端选默认模型。
 export async function getCredentialState(
   client: ApiClient,
   group: number,
   id: number,
+  model: string,
   signal: AbortSignal,
 ): Promise<CredentialStateSnapshot> {
   return readCredentialStateSnapshot(
-    await client.request(`/api/groups/${group}/credentials/${id}/state-refresh`, { signal }),
+    await client.request(
+      `/api/groups/${group}/credentials/${id}/state-refresh${stateRefreshQuery(model)}`,
+      { signal },
+    ),
   )
 }
-// 启动后台刷新运行：请求立即返回 running 为真的快照，后续结果由轮询补齐。
+// 启动指定模型的后台刷新运行：请求立即返回 running 为真的快照，后续结果由轮询补齐。
 export async function startCredentialStateRefresh(
   client: ApiClient,
   group: number,
   id: number,
+  model: string,
   signal: AbortSignal,
 ): Promise<CredentialStateSnapshot> {
   return readCredentialStateSnapshot(
     await client.request(`/api/groups/${group}/credentials/${id}/state-refresh`, {
       method: 'POST',
-      json: {},
+      json: { model },
       signal,
     }),
   )
 }
-// 停止刷新运行：返回的快照已包含这次运行的最后一条记录，running 为假。
+// 停止指定模型的刷新运行：返回的快照已包含这次运行的最后一条记录，running 为假。
 export async function stopCredentialStateRefresh(
   client: ApiClient,
   group: number,
   id: number,
+  model: string,
   signal: AbortSignal,
 ): Promise<CredentialStateSnapshot> {
   return readCredentialStateSnapshot(
-    await client.request(`/api/groups/${group}/credentials/${id}/state-refresh`, {
-      method: 'DELETE',
-      signal,
-    }),
+    await client.request(
+      `/api/groups/${group}/credentials/${id}/state-refresh${stateRefreshQuery(model)}`,
+      { method: 'DELETE', signal },
+    ),
   )
 }
 export async function revealCredential(

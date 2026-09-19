@@ -24,7 +24,7 @@ type CredentialStateRefreshLog struct {
 	StateLength  int                          `gorm:"not null;check:chk_state_refresh_log_length,state_length >= 0"`
 	Attempts     int                          `gorm:"not null;check:chk_state_refresh_log_attempts,attempts >= 0"`
 	HTTPStatus   *int
-	Model        string `gorm:"type:varchar(64);not null;default:''"`
+	Model        string `gorm:"type:varchar(255);not null;default:''"`
 	Input        string `gorm:"type:varchar(64);not null;default:''"`
 	ProxyURL     string `gorm:"type:varchar(255);not null;default:''"`
 	BaseURL      string `gorm:"type:varchar(255);not null;default:''"`

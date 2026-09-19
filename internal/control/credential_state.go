@@ -4,11 +4,14 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math/rand/v2"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/sirupsen/logrus"
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 
 	"gpt-load/internal/channel"
 	"gpt-load/internal/execution"
@@ -20,18 +23,24 @@ import (
 )
 
 // Manual state refresh contract: one fixed probe request repeated until the
-// upstream returns a complete turn state. The run is a background task because
-// a capture may take arbitrarily long; the operator stops it explicitly.
+// upstream returns a complete turn state for the selected model. The run is a
+// background task because a capture may take arbitrarily long; the operator
+// stops it explicitly. A credential may refresh several models at once, so runs
+// and captures are always scoped to one model.
 const (
 	stateRefreshInput = "ping"
-	// defaultStateRefreshInterval 是两次探测之间的间隔，避免持续失败时冲击上游。
-	defaultStateRefreshInterval = time.Second
+	// stateRefreshMinInterval / stateRefreshMaxInterval 是两次探测之间的随机间隔，
+	// 既避免持续失败时冲击上游，也避免固定节奏被上游识别。
+	stateRefreshMinInterval = time.Second
+	stateRefreshMaxInterval = 10 * time.Second
+	// stateRefreshRateLimitDelay 是上游返回 429 后的固定休息时间。
+	stateRefreshRateLimitDelay = 5 * time.Second
 	// stateRefreshTimeout 是单次探测的上限；探测拿到响应头即断开，不会等待流结束。
 	stateRefreshTimeout = 60 * time.Second
 	// stateRefreshStopTimeout 是停止刷新时等待在途探测收敛的上限。
 	stateRefreshStopTimeout = 5 * time.Second
 	// stateRefreshLogLimit 是详情一次回看的刷新记录条数。
-	stateRefreshLogLimit = 50
+	stateRefreshLogLimit = 10
 )
 
 // state refresh failure classifications recorded in the durable refresh log.
@@ -43,6 +52,12 @@ const (
 	stateRefreshFailureCanceled       = "canceled"
 	stateRefreshFailureInternal       = "internal"
 )
+
+// CredentialStateRefreshRequest selects the model one refresh run captures the
+// turn state for.
+type CredentialStateRefreshRequest struct {
+	Model string `json:"model"`
+}
 
 // CredentialStateRefreshLogResponse is one durable refresh record: one probe
 // request and its result. A successful record carries the captured state and
@@ -65,22 +80,46 @@ type CredentialStateRefreshLogResponse struct {
 	CreatedAtMS int64  `json:"created_at_ms"`
 }
 
-// CredentialStateResponse is the stored turn state together with the recent
-// refresh records of one credential.
-type CredentialStateResponse struct {
-	TurnState       string `json:"turn_state"`
-	TurnStateLength int    `json:"turn_state_length"`
-	// RequiredLength 是保留状态所需的完整长度，供界面说明保留规则。
-	RequiredLength int    `json:"required_length"`
-	RefreshedAtMS  *int64 `json:"refreshed_at_ms"`
+// CredentialStateModelResponse is the turn state retained for one model of one
+// credential. A model that is refreshing without a capture yet is reported with
+// an empty state so the界面 can show the run in progress.
+type CredentialStateModelResponse struct {
+	Model       string `json:"model"`
+	TurnState   string `json:"turn_state"`
+	StateLength int    `json:"state_length"`
+	// RefreshedAtMS 是这次捕获的写入时刻；没有捕获时为空。
+	RefreshedAtMS *int64 `json:"refreshed_at_ms"`
 	// ExpiresAtMS 是保留状态自身携带的有效期；为空表示该值无法解析出有效期。
 	ExpiresAtMS *int64 `json:"expires_at_ms"`
-	// Running 表示该凭据当前是否有后台刷新在运行。
+	// Running 表示该模型当前是否有后台刷新在运行。
+	Running bool `json:"running"`
+}
+
+// CredentialStateResponse is the stored turn state of every refreshed model of
+// one credential, together with the recent refresh records of the selected
+// model.
+type CredentialStateResponse struct {
+	// RequiredLength 是保留状态所需的完整长度，供界面说明保留规则。
+	RequiredLength int `json:"required_length"`
+	// AvailableModels 是该分组配置的模型，也就是可以刷新 State 的模型。
+	AvailableModels []string `json:"available_models"`
+	// Model 是本次回看的模型；请求未指定时由服务端选出默认模型。
+	Model string `json:"model"`
+	// Running 表示 Model 当前是否有后台刷新在运行。
 	Running bool                                `json:"running"`
+	States  []CredentialStateModelResponse      `json:"states"`
 	Logs    []CredentialStateRefreshLogResponse `json:"logs"`
 }
 
-// stateRefreshRun is one in-flight background refresh of a single credential.
+// stateRefreshKey identifies one background refresh run: turn state is bound to
+// a credential and a model, so each pair refreshes on its own.
+type stateRefreshKey struct {
+	credentialID uint
+	model        string
+}
+
+// stateRefreshRun is one in-flight background refresh of a single credential
+// and model.
 type stateRefreshRun struct {
 	cancel context.CancelFunc
 	done   chan struct{}
@@ -104,43 +143,51 @@ func (err stateRefreshLengthError) Error() string {
 	return fmt.Sprintf("captured turn state length %d does not match %d", err.observed, execution.CodexTurnStateLength)
 }
 
-// GetCredentialState reads the stored turn state, its record time, its replay
-// expiry, whether a refresh is running, and the recent refresh records of one
-// subscription credential.
+// GetCredentialState reads the turn state retained for every refreshed model,
+// each capture time and replay expiry, whether a refresh is running, and the
+// recent refresh records of one subscription credential and model.
 func (s *Service) GetCredentialState(
 	ctx context.Context,
 	groupID uint,
 	credentialID uint,
+	model string,
 ) (CredentialStateResponse, error) {
 	if groupID == 0 || credentialID == 0 {
 		return CredentialStateResponse{}, app_errors.ErrValidation
 	}
-	response := CredentialStateResponse{
-		RequiredLength: execution.CodexTurnStateLength,
-		Logs:           []CredentialStateRefreshLogResponse{},
-	}
 	// 先取运行态：运行结束会先写完记录再摘除运行标记，因此 running=false 之后的
 	// 读取一定能看到最后一次探测的记录。
-	response.Running = s.stateRefreshRunning(credentialID)
+	runningModels := s.stateRefreshRunningModels(credentialID)
+	response := CredentialStateResponse{
+		RequiredLength:  execution.CodexTurnStateLength,
+		AvailableModels: []string{},
+		States:          []CredentialStateModelResponse{},
+		Logs:            []CredentialStateRefreshLogResponse{},
+	}
 	err := s.withReadSnapshot(ctx, func(tx *gorm.DB) error {
-		if _, err := s.loadStateRefreshGroup(tx, groupID); err != nil {
+		group, err := s.loadStateRefreshGroup(tx, groupID)
+		if err != nil {
 			return err
 		}
 		var credential models.Credential
 		if err := tx.Where("id = ? AND group_id = ?", credentialID, groupID).Take(&credential).Error; err != nil {
 			return err
 		}
-		response.TurnState = credential.TurnState
-		response.TurnStateLength = len(credential.TurnState)
-		if credential.TurnState != "" && credential.TurnStateRefreshedAtMS > 0 {
-			refreshedAtMS := credential.TurnStateRefreshedAtMS
-			response.RefreshedAtMS = &refreshedAtMS
+		availableModels, err := groupStateRefreshModels(group)
+		if err != nil {
+			return err
 		}
-		if expiresAtMS := execution.TurnStateExpiryMS(credential.TurnState); expiresAtMS > 0 {
-			response.ExpiresAtMS = &expiresAtMS
+		response.AvailableModels = availableModels
+		var captures []models.CredentialTurnState
+		if err := tx.Where("credential_id = ?", credentialID).Order("model ASC").Find(&captures).Error; err != nil {
+			return err
+		}
+		response.Model = resolveStateRefreshModel(model, availableModels, captures)
+		for _, row := range captures {
+			response.States = append(response.States, credentialStateModelResponse(row))
 		}
 		var logs []models.CredentialStateRefreshLog
-		if err := tx.Where("group_id = ? AND credential_id = ?", groupID, credentialID).
+		if err := tx.Where("group_id = ? AND credential_id = ? AND model = ?", groupID, credentialID, response.Model).
 			Order("created_at_ms DESC").Order("id DESC").Limit(stateRefreshLogLimit).Find(&logs).Error; err != nil {
 			return err
 		}
@@ -152,68 +199,88 @@ func (s *Service) GetCredentialState(
 	if err != nil {
 		return CredentialStateResponse{}, mapStateRefreshReadError(err)
 	}
+	response.Running = runningModels[response.Model]
+	covered := false
+	for index := range response.States {
+		response.States[index].Running = runningModels[response.States[index].Model]
+		if response.States[index].Model == response.Model {
+			covered = true
+		}
+	}
+	if response.Running && !covered {
+		response.States = append(response.States, CredentialStateModelResponse{
+			Model: response.Model, Running: true,
+		})
+	}
 	return response, nil
 }
 
 // StartCredentialStateRefresh starts the background refresh run of one
-// credential. The run repeats the probe until it captures a complete turn
-// state, cannot prepare another attempt, or is stopped. Starting a credential
-// that is already refreshing is idempotent.
+// credential and model. The run repeats the probe until it captures a complete
+// turn state for that model, cannot prepare another attempt, or is stopped.
+// Starting a model that is already refreshing is idempotent.
 func (s *Service) StartCredentialStateRefresh(
 	ctx context.Context,
 	groupID uint,
 	credentialID uint,
+	model string,
 ) (CredentialStateResponse, error) {
 	if groupID == 0 || credentialID == 0 {
+		return CredentialStateResponse{}, app_errors.ErrValidation
+	}
+	model = strings.TrimSpace(model)
+	if model == "" {
 		return CredentialStateResponse{}, app_errors.ErrValidation
 	}
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	// 先校验目标：不可刷新的凭据必须同步报错，而不是在后台静默失败。
-	if _, _, err := s.loadStateRefreshTarget(ctx, groupID, credentialID); err != nil {
+	// 先校验目标：不可刷新的凭据和分组没有配置的模型必须同步报错，而不是在后台
+	// 静默失败。
+	if _, _, err := s.loadStateRefreshTarget(ctx, groupID, credentialID, model); err != nil {
 		return CredentialStateResponse{}, err
 	}
+	key := stateRefreshKey{credentialID: credentialID, model: model}
 	s.stateMu.Lock()
-	if _, running := s.stateRuns[credentialID]; !running {
+	if _, running := s.stateRuns[key]; !running {
 		if s.stateRuns == nil {
-			s.stateRuns = make(map[uint]*stateRefreshRun)
+			s.stateRuns = make(map[stateRefreshKey]*stateRefreshRun)
 		}
 		// 刷新必须活过发起它的请求，但保留请求上下文中的取值。
 		runContext, cancel := context.WithCancel(context.WithoutCancel(ctx))
 		run := &stateRefreshRun{cancel: cancel, done: make(chan struct{})}
-		s.stateRuns[credentialID] = run
-		go s.runCredentialStateRefresh(runContext, groupID, credentialID, run)
+		s.stateRuns[key] = run
+		go s.runCredentialStateRefresh(runContext, groupID, credentialID, model, run)
 	}
 	s.stateMu.Unlock()
-	return s.GetCredentialState(ctx, groupID, credentialID)
+	return s.GetCredentialState(ctx, groupID, credentialID, model)
 }
 
-// StopCredentialStateRefresh cancels the in-flight refresh run of one
-// credential and waits for its probe to converge, so the returned snapshot
-// already carries the closing record. Stopping an idle credential is a no-op.
+// StopCredentialStateRefresh cancels the in-flight refresh runs of one
+// credential and waits for their probes to converge, so the returned snapshot
+// already carries the closing records. An empty model stops every run of the
+// credential; stopping an idle credential is a no-op.
 func (s *Service) StopCredentialStateRefresh(
 	ctx context.Context,
 	groupID uint,
 	credentialID uint,
+	model string,
 ) (CredentialStateResponse, error) {
 	if groupID == 0 || credentialID == 0 {
 		return CredentialStateResponse{}, app_errors.ErrValidation
 	}
+	model = strings.TrimSpace(model)
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	if _, _, err := s.loadStateRefreshTarget(ctx, groupID, credentialID); err != nil {
+	// 停止只校验分组与凭据：模型可以来自历史捕获，不再要求分组当前仍提供它。
+	if _, _, err := s.loadStateRefreshTarget(ctx, groupID, credentialID, ""); err != nil {
 		return CredentialStateResponse{}, err
 	}
-	s.stateMu.Lock()
-	run := s.stateRuns[credentialID]
-	s.stateMu.Unlock()
-	if run != nil {
-		run.cancel()
+	for _, run := range s.cancelStateRefreshRuns(credentialID, model) {
 		s.waitStateRefresh(ctx, run.done)
 	}
-	return s.GetCredentialState(ctx, groupID, credentialID)
+	return s.GetCredentialState(ctx, groupID, credentialID, model)
 }
 
 // stopStateRefreshes cancels every in-flight refresh run and waits for them to
@@ -239,6 +306,24 @@ func (s *Service) stopStateRefreshes() {
 	}
 }
 
+// cancelStateRefreshRuns cancels the matching runs and returns them for the
+// caller to wait on. An empty model matches every run of the credential.
+func (s *Service) cancelStateRefreshRuns(credentialID uint, model string) []*stateRefreshRun {
+	s.stateMu.Lock()
+	defer s.stateMu.Unlock()
+	runs := make([]*stateRefreshRun, 0, len(s.stateRuns))
+	for key, run := range s.stateRuns {
+		if key.credentialID != credentialID || model != "" && key.model != model {
+			continue
+		}
+		runs = append(runs, run)
+	}
+	for _, run := range runs {
+		run.cancel()
+	}
+	return runs
+}
+
 // waitStateRefresh waits for one run to finish, bounded by the request context
 // and the stop timeout.
 func (s *Service) waitStateRefresh(ctx context.Context, done <-chan struct{}) {
@@ -251,10 +336,17 @@ func (s *Service) waitStateRefresh(ctx context.Context, done <-chan struct{}) {
 	}
 }
 
-func (s *Service) stateRefreshRunning(credentialID uint) bool {
+// stateRefreshRunningModels reports the models of one credential that currently
+// have a refresh run.
+func (s *Service) stateRefreshRunningModels(credentialID uint) map[string]bool {
 	s.stateMu.Lock()
 	defer s.stateMu.Unlock()
-	_, running := s.stateRuns[credentialID]
+	running := make(map[string]bool, len(s.stateRuns))
+	for key := range s.stateRuns {
+		if key.credentialID == credentialID {
+			running[key.model] = true
+		}
+	}
 	return running
 }
 
@@ -264,24 +356,31 @@ func (s *Service) runCredentialStateRefresh(
 	ctx context.Context,
 	groupID uint,
 	credentialID uint,
+	model string,
 	run *stateRefreshRun,
 ) {
+	key := stateRefreshKey{credentialID: credentialID, model: model}
 	defer func() {
 		s.stateMu.Lock()
-		if s.stateRuns[credentialID] == run {
-			delete(s.stateRuns, credentialID)
+		if s.stateRuns[key] == run {
+			delete(s.stateRuns, key)
 		}
 		close(run.done)
 		s.stateMu.Unlock()
 	}()
+	// 上一次运行留下的失败记录不属于这一次运行，先清掉再开始探测。
+	if err := s.pruneFailedStateRefreshLogs(ctx, groupID, credentialID, model); err != nil {
+		s.logStateRefreshFailure(groupID, credentialID, err)
+	}
 	for attempt := 1; ; attempt++ {
 		if ctx.Err() != nil {
 			return
 		}
-		if stop := s.probeCredentialTurnState(ctx, groupID, credentialID, attempt); stop {
+		stop, rateLimited := s.probeCredentialTurnState(ctx, groupID, credentialID, model, attempt)
+		if stop {
 			return
 		}
-		timer := time.NewTimer(s.stateRefreshDelay())
+		timer := time.NewTimer(s.stateRefreshDelay(rateLimited))
 		select {
 		case <-ctx.Done():
 			timer.Stop()
@@ -291,12 +390,25 @@ func (s *Service) runCredentialStateRefresh(
 	}
 }
 
-// stateRefreshDelay is the pause between two probe attempts.
-func (s *Service) stateRefreshDelay() time.Duration {
-	if s.stateRefreshInterval <= 0 {
-		return defaultStateRefreshInterval
+// stateRefreshDelay is the pause between two probe attempts: a fixed rest after
+// an upstream rate limit, otherwise a random interval inside the configured
+// range so a long refresh never hammers the upstream on a fixed rhythm.
+func (s *Service) stateRefreshDelay(rateLimited bool) time.Duration {
+	if rateLimited {
+		return s.stateRefreshRateLimitDelay
 	}
-	return s.stateRefreshInterval
+	minimum := s.stateRefreshMinInterval
+	if minimum <= 0 {
+		minimum = stateRefreshMinInterval
+	}
+	maximum := s.stateRefreshMaxInterval
+	if maximum < minimum {
+		maximum = minimum
+	}
+	if maximum == minimum {
+		return minimum
+	}
+	return minimum + time.Duration(rand.Int64N(int64(maximum-minimum)+1))
 }
 
 // stateRefreshProbe is everything one probe attempt needs after preparation.
@@ -309,24 +421,27 @@ type stateRefreshProbe struct {
 }
 
 // probeCredentialTurnState runs and records one probe attempt. It reports
-// whether the run must stop: after a capture, after a failure that makes the
-// target unrefreshable, after a failed record write, or on cancellation.
+// whether the run must stop (after a capture, after a failure that makes the
+// target unrefreshable, after a failed record write, or on cancellation) and
+// whether the next attempt must rest because the upstream rate limited the
+// probe.
 func (s *Service) probeCredentialTurnState(
 	ctx context.Context,
 	groupID uint,
 	credentialID uint,
+	model string,
 	attempt int,
-) bool {
+) (bool, bool) {
 	startedAt := s.now()
-	probe, err := s.prepareStateRefreshProbe(ctx, groupID, credentialID)
+	probe, err := s.prepareStateRefreshProbe(ctx, groupID, credentialID, model)
 	if err != nil {
 		// 停止发生在准备阶段：这次探测没有发出请求，不留档。
 		if ctx.Err() != nil {
-			return true
+			return true, false
 		}
 		// 目标无法刷新时重试没有意义，记录后结束运行。
-		s.recordAttemptFailure(ctx, groupID, credentialID, fixedStateRefreshOutcome(), attempt, err, startedAt)
-		return true
+		s.recordAttemptFailure(ctx, groupID, credentialID, fixedStateRefreshOutcome(model), attempt, err, startedAt)
+		return true, false
 	}
 	attemptContext, cancel := context.WithTimeout(ctx, stateRefreshTimeout)
 	probed, probeErr := s.probeSubscriptionTurnState(attemptContext, probe.channelID, probe.credential, probe.target, probe.request)
@@ -340,12 +455,12 @@ func (s *Service) probeCredentialTurnState(
 		}
 		stop := s.recordAttemptFailure(ctx, groupID, credentialID, probe.outcome, attempt, probeErr, startedAt)
 		// 凭据被上游拒绝时重试不会成功，其余上游错误继续探测。
-		return stop || stateRefreshFatalProbeError(probeErr)
+		return stop || stateRefreshFatalProbeError(probeErr), stateRefreshRateLimited(probeErr)
 	}
 	probe.outcome.StateLength = len(probed.TurnState)
 	if len(probed.TurnState) != execution.CodexTurnStateLength {
 		return s.recordAttemptFailure(ctx, groupID, credentialID, probe.outcome, attempt,
-			stateRefreshLengthError{observed: len(probed.TurnState)}, startedAt)
+			stateRefreshLengthError{observed: len(probed.TurnState)}, startedAt), false
 	}
 	refreshedAtMS := s.now().UTC().UnixMilli()
 	record := models.CredentialStateRefreshLog{
@@ -362,29 +477,31 @@ func (s *Service) probeCredentialTurnState(
 		DurationMS:   stateRefreshDurationMS(s.now(), startedAt),
 		CreatedAtMS:  refreshedAtMS,
 	}
-	if err := s.persistCredentialTurnState(ctx, groupID, credentialID, probed.TurnState, refreshedAtMS, record); err != nil {
+	if err := s.persistCredentialTurnState(ctx, groupID, credentialID, model, probed.TurnState, refreshedAtMS, record); err != nil {
 		s.logStateRefreshFailure(groupID, credentialID, err)
 	}
-	return true
+	return true, false
 }
 
-// fixedStateRefreshOutcome is the identity of the fixed probe request, known
-// before any preparation step runs.
-func fixedStateRefreshOutcome() stateRefreshOutcome {
-	return stateRefreshOutcome{Model: execution.CodexTurnStateModel, Input: stateRefreshInput}
+// fixedStateRefreshOutcome is the identity of the fixed probe request of one
+// model, known before any preparation step runs.
+func fixedStateRefreshOutcome(model string) stateRefreshOutcome {
+	return stateRefreshOutcome{Model: model, Input: stateRefreshInput}
 }
 
 // prepareStateRefreshProbe resolves everything one probe attempt needs: the
-// target, the state proxy policy, the prepared credential, and the fixed probe
-// request. The whole probe, including any credential token refresh, uses the
-// state proxy policy; the captured value is replayed on the direct data path.
+// target, the state proxy policy, the prepared credential, and the probe
+// request of the selected model. The whole probe, including any credential token
+// refresh, uses the state proxy policy; the captured value is replayed on the
+// direct data path.
 func (s *Service) prepareStateRefreshProbe(
 	ctx context.Context,
 	groupID uint,
 	credentialID uint,
+	model string,
 ) (stateRefreshProbe, error) {
-	probe := stateRefreshProbe{outcome: fixedStateRefreshOutcome()}
-	group, credential, err := s.loadStateRefreshTarget(ctx, groupID, credentialID)
+	probe := stateRefreshProbe{outcome: fixedStateRefreshOutcome(model)}
+	group, credential, err := s.loadStateRefreshTarget(ctx, groupID, credentialID, model)
 	if err != nil {
 		return probe, err
 	}
@@ -412,7 +529,7 @@ func (s *Service) prepareStateRefreshProbe(
 	probe.credential = preparedCredential
 	probe.target = target
 	probe.request = subscriptionruntime.StateProbeRequest{
-		Model:                probe.outcome.Model,
+		Model:                model,
 		Input:                probe.outcome.Input,
 		ProxyURL:             stateProbeProxyURL(transport),
 		ProxyFromEnvironment: transport.FromEnvironment,
@@ -425,11 +542,13 @@ func (s *Service) prepareStateRefreshProbe(
 }
 
 // loadStateRefreshTarget loads the subscription group and credential that own
-// one manual state refresh. The channel must expose the state probe capability.
+// one manual state refresh. The channel must expose the state probe capability
+// and, when a model is selected, the group must serve that model.
 func (s *Service) loadStateRefreshTarget(
 	ctx context.Context,
 	groupID uint,
 	credentialID uint,
+	model string,
 ) (models.Group, models.Credential, error) {
 	var group models.Group
 	var credential models.Credential
@@ -438,6 +557,15 @@ func (s *Service) loadStateRefreshTarget(
 		group = loaded
 		if err != nil {
 			return err
+		}
+		if model != "" {
+			availableModels, err := groupStateRefreshModels(group)
+			if err != nil {
+				return err
+			}
+			if !containsStateRefreshModel(availableModels, model) {
+				return app_errors.ErrValidation
+			}
 		}
 		return tx.Where("id = ? AND group_id = ?", credentialID, groupID).Take(&credential).Error
 	})
@@ -479,38 +607,69 @@ func mapStateRefreshReadError(err error) error {
 	return app_errors.ParseDBError(err)
 }
 
-// persistCredentialTurnState durably stores the captured value and its record
-// time, and appends the refresh record in the same transaction so the stored
-// state, its record time, and its log entry always agree. Turn state is mutable
-// runtime state, so publication never invalidates in-flight requests.
+// persistCredentialTurnState durably stores the captured value of one model and
+// its record time, retires the failures of the run that produced it, and
+// appends the refresh record in the same transaction so the stored state, its
+// record time, and its log entry always agree. Turn state is mutable runtime
+// state, so publication never invalidates in-flight requests.
 func (s *Service) persistCredentialTurnState(
 	ctx context.Context,
 	groupID uint,
 	credentialID uint,
+	model string,
 	turnState string,
 	refreshedAtMS int64,
 	record models.CredentialStateRefreshLog,
 ) error {
 	return s.writeCredentialConfig(ctx, groupID, credentialID, func(tx *gorm.DB) error {
-		result := tx.Model(&models.Credential{}).
-			Where("id = ? AND group_id = ?", credentialID, groupID).
-			Updates(map[string]any{
-				"turn_state":                 turnState,
-				"turn_state_refreshed_at_ms": refreshedAtMS,
-			})
-		if result.Error != nil {
-			return result.Error
+		// 捕获成功后这次运行的失败记录不再有意义，与成功记录同事务清理。
+		if err := pruneFailedStateRefreshLogs(tx, groupID, credentialID, model); err != nil {
+			return err
 		}
-		if result.RowsAffected == 0 {
-			return app_errors.ErrResourceNotFound
+		row := models.CredentialTurnState{
+			CredentialID:  credentialID,
+			Model:         model,
+			TurnState:     turnState,
+			RefreshedAtMS: refreshedAtMS,
+		}
+		if err := tx.Clauses(clause.OnConflict{
+			Columns: []clause.Column{{Name: "credential_id"}, {Name: "model"}},
+			DoUpdates: clause.Assignments(map[string]any{
+				"turn_state":      turnState,
+				"refreshed_at_ms": refreshedAtMS,
+			}),
+		}).Create(&row).Error; err != nil {
+			return err
 		}
 		return tx.Create(&record).Error
 	}, func() error {
-		if !s.registry.SetCredentialTurnState(credentialID, turnState) {
+		if !s.registry.SetCredentialTurnState(credentialID, model, turnState) {
 			return fmt.Errorf("publish credential turn state: credential %d is unavailable", credentialID)
 		}
 		return nil
 	})
+}
+
+// pruneFailedStateRefreshLogs drops the failed refresh records of one credential
+// and model. Failed records describe the run that produced them, so they are
+// retired as soon as that run captures a state or a new run starts.
+func (s *Service) pruneFailedStateRefreshLogs(
+	ctx context.Context,
+	groupID uint,
+	credentialID uint,
+	model string,
+) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	return pruneFailedStateRefreshLogs(s.db.WithContext(context.WithoutCancel(ctx)), groupID, credentialID, model)
+}
+
+func pruneFailedStateRefreshLogs(tx *gorm.DB, groupID uint, credentialID uint, model string) error {
+	return tx.Where(
+		"group_id = ? AND credential_id = ? AND model = ? AND status = ?",
+		groupID, credentialID, model, models.CredentialStateRefreshFailed,
+	).Delete(&models.CredentialStateRefreshLog{}).Error
 }
 
 // recordAttemptFailure appends the durable record of one failed probe attempt.
@@ -597,11 +756,84 @@ func credentialStateRefreshLogResponse(row models.CredentialStateRefreshLog) Cre
 	}
 }
 
+func credentialStateModelResponse(row models.CredentialTurnState) CredentialStateModelResponse {
+	response := CredentialStateModelResponse{
+		Model:       row.Model,
+		TurnState:   row.TurnState,
+		StateLength: len(row.TurnState),
+	}
+	if row.TurnState != "" && row.RefreshedAtMS > 0 {
+		refreshedAtMS := row.RefreshedAtMS
+		response.RefreshedAtMS = &refreshedAtMS
+	}
+	if expiresAtMS := execution.TurnStateExpiryMS(row.TurnState); expiresAtMS > 0 {
+		response.ExpiresAtMS = &expiresAtMS
+	}
+	return response
+}
+
+// groupStateRefreshModels reads the models a group serves. Only a configured
+// model can be probed: the captured state is replayed for exactly that model.
+func groupStateRefreshModels(group models.Group) ([]string, error) {
+	groupModels := make([]GroupModel, 0)
+	if err := decodeGroupDiscoveryJSON(group.Models, &groupModels); err != nil {
+		return nil, fmt.Errorf("decode group %d models: %w", group.ID, err)
+	}
+	models := make([]string, 0, len(groupModels))
+	for _, model := range groupModels {
+		if id := strings.TrimSpace(model.ID); id != "" {
+			models = append(models, id)
+		}
+	}
+	return models, nil
+}
+
+// resolveStateRefreshModel picks the model one state read refers to. Without an
+// explicit selection the default probe model wins, then the first configured
+// model, then the model of the first retained capture.
+func resolveStateRefreshModel(
+	requested string,
+	availableModels []string,
+	captures []models.CredentialTurnState,
+) string {
+	if requested != "" {
+		return requested
+	}
+	if containsStateRefreshModel(availableModels, execution.CodexTurnStateModel) {
+		return execution.CodexTurnStateModel
+	}
+	if len(availableModels) != 0 {
+		return availableModels[0]
+	}
+	for _, row := range captures {
+		if row.Model != "" {
+			return row.Model
+		}
+	}
+	return ""
+}
+
+func containsStateRefreshModel(models []string, model string) bool {
+	for _, candidate := range models {
+		if candidate == model {
+			return true
+		}
+	}
+	return false
+}
+
 // stateRefreshFatalProbeError reports a probe failure that retrying cannot fix:
 // the upstream rejected the credential itself.
 func stateRefreshFatalProbeError(err error) bool {
 	status := upstreamStatusCode(err)
 	return status != nil && (*status == http.StatusUnauthorized || *status == http.StatusForbidden)
+}
+
+// stateRefreshRateLimited reports an upstream rate limit, which must be answered
+// with a fixed rest instead of the regular probe interval.
+func stateRefreshRateLimited(err error) bool {
+	status := upstreamStatusCode(err)
+	return status != nil && *status == http.StatusTooManyRequests
 }
 
 // stateRefreshFailureCode classifies one probe failure for the durable log.

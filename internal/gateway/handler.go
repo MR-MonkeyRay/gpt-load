@@ -1188,9 +1188,12 @@ func (handler *Handler) executeAttempts(
 				ref.IdentityGeneration,
 				normalizedCredential.payload,
 			),
-			Proxy:                  effectiveProxy,
-			ProxyFingerprint:       proxyFingerprint,
-			CredentialTurnState:    ref.TurnState,
+			Proxy:            effectiveProxy,
+			ProxyFingerprint: proxyFingerprint,
+			CredentialTurnState: ref.TurnStateFor(
+				TurnStateModel(optionalModelValue(selection.UpstreamModelID), externalModel),
+				handler.now(),
+			),
 			ForceCredentialRefresh: forceCredentialRefresh,
 			ContinuityKey:          requestAffinity.continuityKey,
 			OnResponse:             handler.responseBindingObserver(recorder.accessKeyID, selection, ref, prepared.request),
@@ -1199,7 +1202,7 @@ func (handler *Handler) executeAttempts(
 			},
 		}
 		if recorder != nil {
-			recorder.setTurnState(turnStateHeaderValue(input))
+			recorder.setTurnState(input.CredentialTurnState)
 			recorder.freezeNextAttemptPricing(
 				handler.freezeAttemptPricing(
 					selection,

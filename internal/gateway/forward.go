@@ -51,8 +51,9 @@ type ForwardInput struct {
 	RouteMode                execution.RouteMode
 	TargetConfig             json.RawMessage
 	Credential               execution.CredentialSnapshot
-	// CredentialTurnState is the captured per-credential turn state replayed only
-	// for the dedicated codex turn-state model.
+	// CredentialTurnState is the captured turn state replayed for the upstream
+	// model of this attempt. The value is resolved per model before the attempt
+	// is built, so a capture is never replayed for another model.
 	CredentialTurnState string
 	Proxy               outboundproxy.Effective
 	ProxyFingerprint    string

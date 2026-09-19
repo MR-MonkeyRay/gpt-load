@@ -566,7 +566,7 @@ func (s *Service) currentCredentialProbeRestoreProof(
 			current := entries[0]
 			currentCredential := credentialProbeCredentialFromEntry(current)
 			if current.Status != state.CredentialStatusActive || !current.Blacklisted ||
-				currentCredential.ref != tested.ref ||
+				!currentCredential.ref.SameIdentity(tested.ref) ||
 				!currentCredential.cooldownUntil.Equal(tested.cooldownUntil) {
 				return
 			}

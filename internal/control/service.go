@@ -85,14 +85,16 @@ type Service struct {
 		*models.ControlOperation,
 		operationStage,
 	) error
-	operationRecoveryWake chan struct{}
-	writeMu               sync.RWMutex
-	observationMu         sync.Mutex
-	observationFlights    map[observationFlightKey]*observationFlight
-	observationSemaphore  chan struct{}
-	stateMu               sync.Mutex
-	stateRuns             map[uint]*stateRefreshRun
-	stateRefreshInterval  time.Duration
+	operationRecoveryWake      chan struct{}
+	writeMu                    sync.RWMutex
+	observationMu              sync.Mutex
+	observationFlights         map[observationFlightKey]*observationFlight
+	observationSemaphore       chan struct{}
+	stateMu                    sync.Mutex
+	stateRuns                  map[stateRefreshKey]*stateRefreshRun
+	stateRefreshMinInterval    time.Duration
+	stateRefreshMaxInterval    time.Duration
+	stateRefreshRateLimitDelay time.Duration
 }
 
 type credentialRuntimeRetirer interface {
@@ -258,11 +260,13 @@ func NewService(
 			}
 			return capability.ProbeTurnState(ctx, credential, target, request)
 		},
-		now:                   time.Now,
-		operationRecoveryWake: make(chan struct{}, 1),
-		observationFlights:    make(map[observationFlightKey]*observationFlight),
-		observationSemaphore:  make(chan struct{}, 1),
-		stateRefreshInterval:  defaultStateRefreshInterval,
+		now:                        time.Now,
+		operationRecoveryWake:      make(chan struct{}, 1),
+		observationFlights:         make(map[observationFlightKey]*observationFlight),
+		observationSemaphore:       make(chan struct{}, 1),
+		stateRefreshMinInterval:    stateRefreshMinInterval,
+		stateRefreshMaxInterval:    stateRefreshMaxInterval,
+		stateRefreshRateLimitDelay: stateRefreshRateLimitDelay,
 	}
 	if cfg != nil {
 		service.environmentProxy = outboundproxy.Environment()

@@ -270,16 +270,29 @@ export interface CredentialStateRecordDto {
   created_at_ms: number
 }
 
-/** 已保留的 State 及其记录时间，附带运行状态与最近刷新记录。 */
-export interface CredentialStateDto {
+/** 一个模型已保留的 State 及其记录时间；正在刷新但尚未捕获时 turn_state 为空。 */
+export interface CredentialStateModelDto {
+  model: string
   turn_state: string
-  turn_state_length: number
-  required_length: number
+  state_length: number
+  /** 捕获的写入时刻；该模型没有捕获时为空。 */
   refreshed_at_ms: number | null
   /** State 自身携带的有效期；为空表示无法从该值解析出有效期。 */
   expires_at_ms: number | null
-  /** 由服务端报告的刷新运行状态，不由本地计时器推导。 */
+  /** 由服务端报告的该模型刷新运行状态，不由本地计时器推导。 */
   running: boolean
+}
+
+/** 各模型已保留的 State，附带所选模型的运行状态与最近刷新记录。 */
+export interface CredentialStateDto {
+  required_length: number
+  /** 分组已配置的模型，也就是可以刷新 State 的模型；可能为空。 */
+  available_models: string[]
+  /** 本次回看的模型；请求未指定时由服务端选出默认模型。 */
+  model: string
+  /** 本次回看的模型是否有后台刷新在运行。 */
+  running: boolean
+  states: CredentialStateModelDto[]
   logs: CredentialStateRecordDto[]
 }
 

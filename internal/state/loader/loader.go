@@ -18,7 +18,6 @@ import (
 	"gpt-load/internal/accessquota"
 	"gpt-load/internal/channel"
 	"gpt-load/internal/connection"
-	"gpt-load/internal/execution"
 	"gpt-load/internal/outboundproxy"
 	"gpt-load/internal/platform/config"
 	"gpt-load/internal/platform/encryption"
@@ -277,6 +276,34 @@ func queryCredentials(ctx context.Context, db *gorm.DB) ([]models.Credential, er
 	return rows, nil
 }
 
+// queryTurnStateCaptures loads every persisted turn state grouped by credential,
+// optionally limited to one group. Turn state is runtime state that belongs to a
+// credential and a model, so it is loaded separately from credential identity.
+func queryTurnStateCaptures(
+	ctx context.Context,
+	db *gorm.DB,
+	groupID uint,
+) (map[uint]map[string]string, error) {
+	query := db.WithContext(ctx).Model(&models.CredentialTurnState{})
+	if groupID != 0 {
+		query = query.Where("credential_id IN (?)",
+			db.WithContext(ctx).Model(&models.Credential{}).Select("id").Where("group_id = ?", groupID),
+		)
+	}
+	var rows []models.CredentialTurnState
+	if err := query.Order("credential_id ASC").Find(&rows).Error; err != nil {
+		return nil, fmt.Errorf("query credential turn states: %w", err)
+	}
+	captures := make(map[uint]map[string]string, len(rows))
+	for _, row := range rows {
+		if captures[row.CredentialID] == nil {
+			captures[row.CredentialID] = make(map[string]string, 1)
+		}
+		captures[row.CredentialID][row.Model] = row.TurnState
+	}
+	return captures, nil
+}
+
 // BuildCompileInput maps persisted configuration rows into a runtime compiler input.
 func BuildCompileInput(
 	ctx context.Context,
@@ -350,7 +377,11 @@ func BuildGroupCredentialEntries(
 		Find(&rows).Error; err != nil {
 		return nil, fmt.Errorf("query group %d credentials: %w", groupID, err)
 	}
-	entries := mapCredentials(rows, []models.Group{group})
+	turnStates, err := queryTurnStateCaptures(ctx, db, groupID)
+	if err != nil {
+		return nil, err
+	}
+	entries := mapCredentials(rows, []models.Group{group}, turnStates)
 	if err := state.ValidateCredentialEntries(entries); err != nil {
 		return nil, fmt.Errorf("validate group %d credentials: %w", groupID, err)
 	}
@@ -382,7 +413,11 @@ func BuildGroupCredentialEntriesWithProxy(
 		Find(&rows).Error; err != nil {
 		return nil, fmt.Errorf("query group %d credentials: %w", groupID, err)
 	}
-	entries, err := mapCredentialsWithProxy(rows, []models.Group{group}, encryptionService)
+	turnStates, err := queryTurnStateCaptures(ctx, db, groupID)
+	if err != nil {
+		return nil, err
+	}
+	entries, err := mapCredentialsWithProxy(rows, []models.Group{group}, turnStates, encryptionService)
 	if err != nil {
 		return nil, fmt.Errorf("map group %d credentials: %w", groupID, err)
 	}
@@ -408,7 +443,11 @@ func BuildCredentialEntries(ctx context.Context, db *gorm.DB) ([]state.Credentia
 	if err != nil {
 		return nil, err
 	}
-	entries := mapCredentials(rows, groups)
+	turnStates, err := queryTurnStateCaptures(ctx, db, 0)
+	if err != nil {
+		return nil, err
+	}
+	entries := mapCredentials(rows, groups, turnStates)
 	if err := state.ValidateCredentialEntries(entries); err != nil {
 		return nil, fmt.Errorf("validate credentials: %w", err)
 	}
@@ -432,7 +471,11 @@ func BuildCredentialEntriesWithProxy(
 	if err != nil {
 		return nil, err
 	}
-	entries, err := mapCredentialsWithProxy(rows, groups, encryptionService)
+	turnStates, err := queryTurnStateCaptures(ctx, db, 0)
+	if err != nil {
+		return nil, err
+	}
+	entries, err := mapCredentialsWithProxy(rows, groups, turnStates, encryptionService)
 	if err != nil {
 		return nil, err
 	}
@@ -467,7 +510,11 @@ func (l *Loader) read(
 	if err != nil {
 		return state.CompileInput{}, nil, nil, err
 	}
-	entries, err := mapCredentialsWithProxy(credentials, rows.groups, l.encryption)
+	turnStates, err := queryTurnStateCaptures(ctx, l.db, 0)
+	if err != nil {
+		return state.CompileInput{}, nil, nil, err
+	}
+	entries, err := mapCredentialsWithProxy(credentials, rows.groups, turnStates, l.encryption)
 	if err != nil {
 		return state.CompileInput{}, nil, nil, err
 	}
@@ -784,7 +831,11 @@ func mapCredentialConfigs(
 	return result
 }
 
-func mapCredentials(rows []models.Credential, groups []models.Group) []state.CredentialEntry {
+func mapCredentials(
+	rows []models.Credential,
+	groups []models.Group,
+	turnStates map[uint]map[string]string,
+) []state.CredentialEntry {
 	targets := credentialTargets(groups)
 	result := make([]state.CredentialEntry, 0, len(rows))
 	for _, row := range rows {
@@ -800,8 +851,7 @@ func mapCredentials(rows []models.Credential, groups []models.Group) []state.Cre
 			),
 			Fingerprint: row.Fingerprint, WeightManual: cloneWeight(row.WeightManual),
 			Status: state.CredentialStatus(row.Status), AuthState: state.CredentialAuthState(row.AuthState), EncryptedValue: row.Data,
-			TurnState:            row.TurnState,
-			TurnStateExpiresAtMS: execution.TurnStateExpiryMS(row.TurnState),
+			TurnStates: state.NewTurnStates(turnStates[row.ID]),
 		})
 	}
 	return result
@@ -810,9 +860,10 @@ func mapCredentials(rows []models.Credential, groups []models.Group) []state.Cre
 func mapCredentialsWithProxy(
 	rows []models.Credential,
 	groups []models.Group,
+	turnStates map[uint]map[string]string,
 	encryptionService encryption.Service,
 ) ([]state.CredentialEntry, error) {
-	entries := mapCredentials(rows, groups)
+	entries := mapCredentials(rows, groups, turnStates)
 	for index, row := range rows {
 		if row.ProxyConfig == nil {
 			continue

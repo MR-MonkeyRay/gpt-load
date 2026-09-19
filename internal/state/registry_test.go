@@ -1347,9 +1347,10 @@ func keyStatus(t *testing.T, registry *CredentialRegistry, credentialID uint) Cr
 	return registry.buckets[groupID][credentialID].Status
 }
 
-// The replay value of one captured turn state never outlives the expiry it
-// carries, and a capture without a readable expiry is never replayed.
-func TestCredentialTurnStateStopsAtItsEmbeddedExpiry(t *testing.T) {
+// A captured turn state is replayed only for the model it was captured for,
+// one credential keeps captures for several models at once, and the replay
+// value never outlives the expiry it carries.
+func TestCredentialTurnStateIsBoundToModelAndExpiry(t *testing.T) {
 	registry := NewCredentialRegistry()
 	now := time.Date(2026, time.September, 18, 12, 0, 0, 0, time.UTC)
 	registry.now = func() time.Time { return now }
@@ -1358,35 +1359,74 @@ func TestCredentialTurnStateStopsAtItsEmbeddedExpiry(t *testing.T) {
 		Fingerprint: "test-fingerprint", EncryptedValue: "cipher-one",
 	}})
 	ref, ok := registry.CredentialRef(1)
-	if !ok || ref.TurnState != "" {
+	if !ok || ref.TurnStateFor("gpt-6-astra", now) != "" {
 		t.Fatalf("unpublished reference = %#v, found = %t", ref, ok)
 	}
 
-	value := turnstatetest.Token(now.Add(time.Hour))
-	if !registry.SetCredentialTurnState(1, value) {
+	first := turnstatetest.Token(now.Add(time.Hour))
+	if !registry.SetCredentialTurnState(1, "gpt-6-astra", first) {
 		t.Fatal("SetCredentialTurnState() did not publish the value")
 	}
-	if ref, _ := registry.CredentialRef(1); ref.TurnState != value {
+	// 同一凭据的不同模型各自保存，互不覆盖。
+	second := turnstatetest.Token(now.Add(2 * time.Hour))
+	if !registry.SetCredentialTurnState(1, "gpt-5-codex", second) {
+		t.Fatal("SetCredentialTurnState() did not publish the second model")
+	}
+	if registry.SetCredentialTurnState(1, "  ", first) {
+		t.Fatal("SetCredentialTurnState() accepted a blank model")
+	}
+	ref, _ = registry.CredentialRef(1)
+	if ref.TurnStateFor("gpt-6-astra", now) != first || ref.TurnStateFor("gpt-5-codex", now) != second {
 		t.Fatalf("published reference = %#v", ref)
 	}
+	// 没有捕获过的模型绝不复用别的模型的 state。
+	if ref.TurnStateFor("gpt-4", now) != "" {
+		t.Fatalf("unrelated model replayed a capture: %#v", ref)
+	}
 	refs := registry.CaptureActiveCredentialRefs([]uint{10})
-	if len(refs) != 1 || refs[0].TurnState != value {
+	if len(refs) != 1 ||
+		refs[0].TurnStateFor("gpt-6-astra", now) != first ||
+		refs[0].TurnStateFor("gpt-5-codex", now) != second {
 		t.Fatalf("captured references = %#v", refs)
 	}
-
-	now = now.Add(2 * time.Hour)
-	if ref, _ := registry.CredentialRef(1); ref.TurnState != "" {
-		t.Fatalf("expired reference = %#v", ref)
+	if blacklisted := registry.BlacklistedCredentials(); len(blacklisted) != 0 {
+		t.Fatalf("unexpected blacklisted references = %#v", blacklisted)
 	}
-	if refs := registry.CaptureActiveCredentialRefs([]uint{10}); len(refs) != 1 || refs[0].TurnState != "" {
-		t.Fatalf("expired captured references = %#v", refs)
+
+	now = now.Add(90 * time.Minute)
+	ref, _ = registry.CredentialRef(1)
+	if ref.TurnStateFor("gpt-6-astra", now) != "" || ref.TurnStateFor("gpt-5-codex", now) != second {
+		t.Fatalf("expired reference = %#v", ref)
 	}
 
 	// 长度正确但无法解析有效期的值同样不可复用。
-	if !registry.SetCredentialTurnState(1, strings.Repeat("s", execution.CodexTurnStateLength)) {
+	if !registry.SetCredentialTurnState(1, "gpt-6-astra", strings.Repeat("s", execution.CodexTurnStateLength)) {
 		t.Fatal("SetCredentialTurnState() did not publish the value")
 	}
-	if ref, _ := registry.CredentialRef(1); ref.TurnState != "" {
+	if ref, _ := registry.CredentialRef(1); ref.TurnStateFor("gpt-6-astra", now) != "" {
 		t.Fatalf("unreadable reference = %#v", ref)
+	}
+}
+
+// 运行时捕获是可变状态，不参与凭据身份，因此刷新 state 不能使已捕获的引用失效。
+func TestCredentialRefIdentityIgnoresTurnStates(t *testing.T) {
+	registry := NewCredentialRegistry()
+	now := time.Date(2026, time.September, 18, 12, 0, 0, 0, time.UTC)
+	registry.now = func() time.Time { return now }
+	mustReplaceKeyEntries(t, registry, []CredentialEntry{{
+		ID: 1, GroupID: 10, Status: CredentialStatusActive, Version: 1, IdentityGeneration: 1,
+		Fingerprint: "test-fingerprint", EncryptedValue: "cipher-one",
+	}})
+	before, _ := registry.CredentialRef(1)
+	if !registry.SetCredentialTurnState(1, "gpt-6-astra", turnstatetest.Token(now.Add(time.Hour))) {
+		t.Fatal("SetCredentialTurnState() did not publish the value")
+	}
+	after, _ := registry.CredentialRef(1)
+	if !before.SameIdentity(after) {
+		t.Fatalf("a capture changed credential identity: %#v / %#v", before, after)
+	}
+	plain := CredentialRef{ID: 2, GroupID: 10}
+	if plain.SameIdentity(after) {
+		t.Fatal("different credentials compared equal")
 	}
 }
